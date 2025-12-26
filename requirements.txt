@@ -2,3 +2,6 @@ python-telegram-bot
 
 groq
 APScheduler
+
+requests
+beautifulsoup4
