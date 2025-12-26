@@ -2,6 +2,8 @@ import os
 import asyncio
 import threading
 import random
+import requests
+from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, Application
@@ -80,7 +82,45 @@ async def post_init(application: Application):
     scheduler.add_job(pensamiento_autonomo, 'interval', hours=4, args=[application])
     scheduler.start()
     print("✅ Reloj iniciado con éxito.")
+# --- MÓDULO DE VISIÓN (OJOS) ---
+def espiar_itchio():
+    """Lía entra a Itch.io y mira qué assets gratuitos están de moda."""
+    url = "https://itch.io/game-assets/free"
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            juegos = soup.find_all('div', class_='game_cell')
+            
+            reporte = "🎮 **Top 5 Assets Gratuitos en Itch.io ahora mismo:**\n\n"
+            contador = 0
+            
+            for juego in juegos:
+                if contador >= 5: break
+                titulo = juego.find('div', class_='game_title').text.strip()
+                link = juego.find('a', class_='title_link')['href']
+                desc = juego.find('div', class_='game_text')
+                desc_text = desc.text.strip() if desc else "Sin descripción"
+                
+                reporte += f"🔹 **{titulo}**\n📝 {desc_text}\n🔗 {link}\n\n"
+                contador += 1
+            
+            return reporte
+        else:
+            return f"⚠️ No pude entrar a Itch.io (Status: {response.status_code})"
+    except Exception as e:
+        return f"⚠️ Error visual: {str(e)}"
 
+async def comando_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando manual para pedirle que mire Itch.io"""
+    await update.message.reply_text("🔎 Escaneando Itch.io en busca de tesoros... dame unos segundos.")
+    # Ejecutamos la función de scraping en un hilo aparte para no congelar al bot
+    loop = asyncio.get_running_loop()
+    reporte = await loop.run_in_executor(None, espiar_itchio)
+    await update.message.reply_text(reporte)
+    
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
@@ -144,6 +184,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("aprende", aprender))
     app.add_handler(CommandHandler("aprender", aprender))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_con_lia))
-    
+    app.add_handler(CommandHandler("assets", comando_assets))
     # 3. Arrancamos
     app.run_polling()
+
