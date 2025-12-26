@@ -19,8 +19,7 @@ jobs:
 
       - name: Instalar herramientas de Lía
         run: |
-          pip install --upgrade requests beautifulsoup4 google-genai
-
+         pip install --upgrade google-genai requests beautifulsoup4
       - name: Ejecutar a Lía
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
