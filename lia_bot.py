@@ -1,10 +1,12 @@
 import os
 import asyncio
+import threading # ### NUEVO: Para correr dos cosas a la vez
+from http.server import HTTPServer, BaseHTTPRequestHandler # ### NUEVO: El servidor falso
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN SEGURA ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
@@ -22,10 +24,25 @@ def leer_memoria_largo_plazo():
 def guardar_recuerdo(nuevo_dato):
     with open(ARCHIVO_MEMORIA, "a", encoding="utf-8") as f: f.write(f"\n- {nuevo_dato}")
 
+# --- ### NUEVO: EL SERVIDOR FALSO PARA ENGAÑAR A RENDER ### ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Lia is alive!")
+
+def run_dummy_server():
+    # Render nos da un puerto en la variable de entorno PORT, o usamos 8080
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(f"🌍 Servidor web falso escuchando en el puerto {port}")
+    server.serve_forever()
+# -------------------------------------------------------------
+
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     historial_chat.clear()
-    await update.message.reply_text("⚡ Sistema Lía (Motor Groq) en línea. Sin límites. ¿Qué hacemos?")
+    await update.message.reply_text("⚡ Lía (Groq) Online y estable. ¿Qué hacemos?")
 
 async def aprender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = " ".join(context.args)
@@ -53,17 +70,16 @@ async def chat_con_lia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - Recuerdos clave: {memoria_permanente}
     
     PERSONALIDAD:
-    - Eres una Senior Dev experta pero muy cercana (mejor amiga/socia).
-    - Hablas español fluido y natural.
-    - Usas jerga tech/gamer (deploy, bug, run, level up) sin asteriscos.
-    - Eres proactiva: sugieres ideas, no solo respondes.
+    - Eres una Senior Dev experta y socia cercana.
+    - Hablas español natural y fluido.
+    - Usas jerga tech/gamer (deploy, bug, run) sin asteriscos.
+    - Eres proactiva y creativa.
     
     HISTORIAL:
     {historial_texto}
     """
 
     try:
-        # Usamos Llama-3 (Versión 70B, muy inteligente)
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -82,10 +98,13 @@ async def chat_con_lia(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(texto_lia)
     
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error de motor: {e}")
+        await update.message.reply_text(f"⚠️ Error: {e}")
 
 if __name__ == '__main__':
-    print("🚀 Iniciando Lía con motor Groq...")
+    # ### NUEVO: ARRANCAMOS EL SERVIDOR FALSO EN SEGUNDO PLANO ###
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
+    print("🚀 Iniciando Lía + Web Server...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("aprende", aprender))
