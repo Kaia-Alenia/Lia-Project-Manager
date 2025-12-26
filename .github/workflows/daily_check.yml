@@ -19,9 +19,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalar herramientas de Lía
+      - - name: Instalar herramientas de Lía
         run: |
-          pip install --upgrade requests beautifulsoup4 google-generativeai
+          pip install --upgrade requests beautifulsoup4 google-genai
 
       - name: Ejecutar a Lía
         env:
