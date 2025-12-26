@@ -82,9 +82,9 @@ async def post_init(application: Application):
     scheduler.add_job(pensamiento_autonomo, 'interval', hours=4, args=[application])
     scheduler.start()
     print("✅ Reloj iniciado con éxito.")
-# --- MÓDULO DE VISIÓN (OJOS) ---
+# --- MÓDULO DE VISIÓN (OJOS) BLINDADO ---
 def espiar_itchio():
-    """Lía entra a Itch.io y mira qué assets gratuitos están de moda."""
+    """Lía entra a Itch.io, ignorando errores de estructura."""
     url = "https://itch.io/game-assets/free"
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
@@ -94,32 +94,42 @@ def espiar_itchio():
             soup = BeautifulSoup(response.text, 'html.parser')
             juegos = soup.find_all('div', class_='game_cell')
             
-            reporte = "🎮 **Top 5 Assets Gratuitos en Itch.io ahora mismo:**\n\n"
+            if not juegos:
+                return "⚠️ Entré a Itch.io pero no encontré la lista de juegos. Quizás cambiaron su diseño."
+
+            reporte = "🎮 **Top Assets Gratuitos en Itch.io (Tiempo Real):**\n\n"
             contador = 0
             
             for juego in juegos:
                 if contador >= 5: break
-                titulo = juego.find('div', class_='game_title').text.strip()
-                link = juego.find('a', class_='title_link')['href']
-                desc = juego.find('div', class_='game_text')
-                desc_text = desc.text.strip() if desc else "Sin descripción"
+                
+                # --- ZONA SEGURA ---
+                # 1. Buscamos el contenedor del título primero
+                title_div = juego.find('div', class_='game_title')
+                if not title_div: continue # Si no tiene título, es basura/anuncio. Saltamos.
+                
+                # 2. Buscamos el link DENTRO del título
+                link_tag = title_div.find('a')
+                if not link_tag: continue # Si no tiene link, saltamos.
+                
+                # 3. Extraemos datos de forma segura
+                titulo = link_tag.text.strip()
+                link = link_tag.get('href') # .get() es más seguro que ['href']
+                
+                # 4. Descripción (Opcional)
+                desc_div = juego.find('div', class_='game_text')
+                # Limpiamos el texto para que no sea kilométrico
+                desc_text = desc_div.text.strip().replace('\n', ' ')[:100] + "..." if desc_div else "Sin descripción"
                 
                 reporte += f"🔹 **{titulo}**\n📝 {desc_text}\n🔗 {link}\n\n"
                 contador += 1
+                # -------------------
             
             return reporte
         else:
-            return f"⚠️ No pude entrar a Itch.io (Status: {response.status_code})"
+            return f"⚠️ Itch.io me rechazó la conexión (Status: {response.status_code})"
     except Exception as e:
-        return f"⚠️ Error visual: {str(e)}"
-
-async def comando_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando manual para pedirle que mire Itch.io"""
-    await update.message.reply_text("🔎 Escaneando Itch.io en busca de tesoros... dame unos segundos.")
-    # Ejecutamos la función de scraping en un hilo aparte para no congelar al bot
-    loop = asyncio.get_running_loop()
-    reporte = await loop.run_in_executor(None, espiar_itchio)
-    await update.message.reply_text(reporte)
+        return f"⚠️ Error visual grave: {str(e)}"
     
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,4 +197,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("assets", comando_assets))
     # 3. Arrancamos
     app.run_polling()
+
 
