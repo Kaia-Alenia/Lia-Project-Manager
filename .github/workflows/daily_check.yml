@@ -17,10 +17,9 @@ jobs:
         with:
           python-version: '3.11' # Versión actualizada para Lía
 
-      - name: Instalar herramientas de Lía
-        run: |
-         pip install --upgrade google-genai requests beautifulsoup4
       - name: Ejecutar a Lía
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python monitor.py
