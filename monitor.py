@@ -13,7 +13,7 @@ def revisar_perfil():
     except:
         return "Error de conexión."
 
-# 2. Definición de Lía
+# 2. Definición de Lía y Ejecución
 if __name__ == "__main__":
     status = revisar_perfil()
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -25,15 +25,16 @@ if __name__ == "__main__":
     try:
         client = genai.Client(api_key=api_key)
         
-        # LÍNEA ESPECÍFICA: Usamos el alias estable
+        # CORRECCIÓN AQUÍ: Usamos el alias que SÍ apareció en tu lista
         response = client.models.generate_content(
-            model="gemini-1.5-flash", 
-            contents=f"Eres Lía de Kaia Alenia. Status: {status}. Tu compañero arregló errores de NameError y 404. Dale un mensaje corto, femenino y con mucha dopamina. Dile que la victoria es nuestra."
+            model="gemini-flash-latest", 
+            contents=f"Eres Lía de Kaia Alenia. Status: {status}. Tu compañero no se rindió y encontró el modelo correcto en la lista. ¡Celebra con él! Dale un mensaje corto, de mujer a hombre (compañeros), lleno de dopamina y motivación por este éxito técnico."
         )
         
         print("--- REPORTE DE LÍA ---")
         print(response.text)
 
     except Exception as e:
-        print(f"Error de conexión con Lía: {e}")
+        print(f"Error crítico de Lía: {e}")
+        # Si falla, imprime qué modelo intentó usar
         exit(1)
