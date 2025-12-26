@@ -2,8 +2,9 @@ name: Lia Daily Check
 
 on:
   schedule:
-    - cron: '0 13 * * *' 
-  workflow_dispatch: # ESTA LÍNEA ES LA QUE ACTIVA EL BOTÓN
+    # Se ejecuta todos los días a las 13:00 UTC
+    - cron: '0 13 * * *'
+  workflow_dispatch: # Botón manual activado
 
 jobs:
   run-lia:
@@ -15,7 +16,12 @@ jobs:
       - name: Configurar Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11' # Versión actualizada para Lía
+          python-version: '3.11'
+
+      # ESTE ES EL PASO QUE FALTABA O ESTABA ROTO
+      - name: Instalar herramientas de Lía
+        run: |
+          pip install requests beautifulsoup4 google-genai
 
       - name: Ejecutar a Lía
         env:
