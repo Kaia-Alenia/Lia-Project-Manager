@@ -1,0 +1,29 @@
+name: Lia Daily Check
+
+on:
+  schedule:
+    # Línea específica a cambiar para la hora (en formato UTC)
+    # 13:00 UTC es aprox. las 07:00 AM - 10:00 AM en LATAM
+    - cron: '0 13 * * *' 
+  workflow_dispatch: # Esto permite que tú la despiertes manualmente cuando quieras
+
+jobs:
+  run-lia:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Instalar herramientas de Lía
+        run: |
+          pip install requests beautifulsoup4 google-generativeai
+
+      - name: Ejecutar a Lía
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python monitor.py
