@@ -3,7 +3,7 @@ name: Lia Daily Check
 on:
   schedule:
     # Se ejecuta todos los días a las 13:00 UTC
-    - cron: '0 13 * * *'
+    - cron: '0 10 * * *'
   workflow_dispatch: # Botón manual activado
 
 jobs:
