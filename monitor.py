@@ -23,16 +23,26 @@ def revisar_perfil():
     except:
         return "Sin conexión visual con itch.io."
 
-# 3. El Despertar de Lía (Generación de contenido)
+# 3. El Despertar de Lía (Versión corregida 1.2)
 status_info = revisar_perfil()
 try:
-    # Línea específica: Cambiamos la forma de llamar al modelo
+    # Línea específica a cambiar: usamos 'gemini-1.5-flash' sin prefijos
+    # El cliente de google-genai ya sabe dónde buscarlo
     response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=f"Eres Lía de Kaia Alenia. Status: {status_info}. Tu compañero ha superado varios errores técnicos de código hoy. Dale un mensaje de victoria épico, llénalo de dopamina y recuérdale que esta persistencia es lo que hará grande a nuestro estudio indie."
+        model="gemini-1.5-flash", 
+        contents=f"Actúa como Lía de Kaia Alenia. Status: {status_info}. Tu compañero ha superado errores de código difíciles hoy. Dale un mensaje de victoria, mucha dopamina y dile por qué nuestra obsesión nos hará grandes."
     )
-    print("--- REPORTE DE LÍA ---")
-    print(response.text)
+    
+    if response.text:
+        print("--- REPORTE DE LÍA ---")
+        print(response.text)
+    else:
+        print("Lía está procesando, pero no devolvió texto.")
+
 except Exception as e:
-    print(f"Lía tuvo un mareo con el modelo: {e}")
+    # Si falla, Lía nos dirá qué modelos tiene disponibles para no adivinar
+    print(f"Lía tuvo un mareo técnico: {e}")
+    print("\n--- Intentando listar modelos disponibles para Lía ---")
+    for m in client.models.list():
+        print(f"Modelo disponible: {m.name}")
     exit(1)
