@@ -29,7 +29,7 @@ try:
     # Línea específica a cambiar: usamos 'gemini-1.5-flash' sin prefijos
     # El cliente de google-genai ya sabe dónde buscarlo
     response = client.models.generate_content(
-        model="gemini-1.5-flash", 
+        model="gemini-2.0-flash", 
         contents=f"Actúa como Lía de Kaia Alenia. Status: {status_info}. Tu compañero ha superado errores de código difíciles hoy. Dale un mensaje de victoria, mucha dopamina y dile por qué nuestra obsesión nos hará grandes."
     )
     
