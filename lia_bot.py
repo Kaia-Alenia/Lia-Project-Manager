@@ -199,6 +199,31 @@ async def generar_audio_tts(texto, chat_id, context):
 
 # --- HANDLERS (COMANDOS) ---
 
+async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Genera imágenes usando Pollinations AI (Flux)."""
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("🎨 Uso: `/imagina Descripción de la imagen`")
+        return
+
+    await update.message.reply_chat_action("upload_photo")
+    
+    # Construcción de URL para Pollinations con Flux
+    seed = random.randint(1, 1000000)
+    # Codificamos el prompt para URL por si tiene caracteres raros
+    prompt_safe = requests.utils.quote(prompt)
+    
+    image_url = f"https://image.pollinations.ai/prompt/{prompt_safe}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    
+    try:
+        await update.message.reply_photo(
+            photo=image_url, 
+            caption=f"🎨 **Concepto Visual:**\n_{prompt}_", 
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error generando imagen: {e}")
+
 async def cmd_conectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nuevo_repo = " ".join(context.args).strip()
     if not nuevo_repo or "/" not in nuevo_repo:
@@ -275,11 +300,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     f, s = obtener_metricas_github_real()
     
     msg = (
-        f"📊 **Estado Lía Restaurado**\n"
+        f"📊 **Estado Lía v4.0**\n"
         f"🧠 Memoria: {db_ok}\n"
         f"🐙 Repo: {gh_ok}\n"
-        f"📈 Métricas: {f} Seguidores, {s} Estrellas\n"
-        f"🗣️ Voz: Activa"
+        f"🎨 Imagenes: Pollinations (Flux)\n"
+        f"📈 Métricas: {f} Seguidores, {s} Estrellas"
     )
     await update.message.reply_text(msg)
 
@@ -304,7 +329,7 @@ async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if random.random() < 0.2:
         await generar_audio_tts(resp[:200], update.effective_chat.id, context)
 
-# --- SERVIDOR WEB (CORREGIDO PARA MONITORING) ---
+# --- SERVIDOR WEB (MONITORING FIX) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -312,7 +337,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"<h1>Lia Systems: ONLINE</h1><p>Status: Active</p>")
     
-    def do_HEAD(self): # <--- ESTO ES LO NUEVO QUE ARREGLA EL ERROR 501
+    def do_HEAD(self): # Soporte para monitores de uptime
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
@@ -348,9 +373,10 @@ if __name__ == '__main__':
     
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("⚡ Lía Restaurada.")))
+    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("⚡ Lía Online (Flux + GitHub + Supabase).")))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("conectar", cmd_conectar))
+    app.add_handler(CommandHandler("imagina", cmd_imagina)) # <--- RESTAURADO
     app.add_handler(CommandHandler("tarea", cmd_tarea))
     app.add_handler(CommandHandler("bug", cmd_bug))
     app.add_handler(CommandHandler("feature", cmd_feature))
@@ -361,5 +387,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA COMPLETAMENTE OPERATIVA <<<")
+    print(">>> LÍA V4.0 OPERATIVA <<<")
     app.run_polling()
