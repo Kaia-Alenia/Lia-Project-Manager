@@ -1,4 +1,3 @@
-[[FILE: lia_bot.py]]
 import os
 import sys
 import io
@@ -405,3 +404,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v5.3 COMPLETA INICIADA <<<")
     app.run_polling()
+
