@@ -293,8 +293,23 @@ async def chat_texto(u, c):
     await u.message.reply_text(resp)
     if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
 
-# --- SERVER ---
-def run_server(): HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), type('H', (BaseHTTPRequestHandler,), {'do_GET': lambda s: s.wfile.write(b"OK"), 'do_HEAD': lambda s: s.send_response(200)})).serve_forever()
+# --- SERVER WEB (Health Check Robusto) ---
+class HealthHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args): pass # Silenciar logs del server para no ensuciar
+    
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+        
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+def run_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server.serve_forever()
 
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()
@@ -312,3 +327,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA RESTAURADA AL 100% <<<")
     app.run_polling()
+
