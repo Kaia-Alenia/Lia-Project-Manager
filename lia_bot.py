@@ -9,6 +9,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, Application
 from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from gtts import gTTS # <--- NUEVA IMPORTACIÓN
 
 # --- CONFIGURACIÓN ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -30,13 +31,31 @@ def guardar_recuerdo(nuevo_dato):
 # --- SERVIDOR ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Online")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Voice Active")
     def do_HEAD(self):
         self.send_response(200); self.end_headers()
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     HTTPServer(('0.0.0.0', port), HealthCheckHandler).serve_forever()
+
+# --- NUEVA FUNCIÓN: GENERADOR DE VOZ (TTS) ---
+async def generar_audio_tts(texto, chat_id, context):
+    """Convierte texto a voz y envía el audio."""
+    try:
+        # Creamos el audio en Español Latino ('es' con tld 'com.mx' suele ser más neutro/latino)
+        tts = gTTS(text=texto, lang='es', tld='com.mx') 
+        archivo_audio = "respuesta_lia.mp3"
+        tts.save(archivo_audio)
+        
+        # Enviamos el audio
+        with open(archivo_audio, 'rb') as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        
+        # Limpieza
+        os.remove(archivo_audio)
+    except Exception as e:
+        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Se me fue la voz: {e}")
 
 # --- LÓGICA DE SCRAPING (ITCH.IO) ---
 def espiar_itchio():
@@ -58,7 +77,7 @@ def espiar_itchio():
         return "⚠️ Error Itch.io"
     except Exception as e: return f"⚠️ Error visual: {e}"
 
-# --- LÓGICA DE IMAGEN (MEJORADA) ---
+# --- LÓGICA DE IMAGEN ---
 async def comando_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
@@ -66,11 +85,10 @@ async def comando_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(f"🎨 Pintando '{prompt}'...")
     
-    # Prompt Enhancer
     try:
         mejora = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": f"Translate to English, add 'high quality, detailed' and if pixel art add 'pixel perfect, unaliased': {prompt}"}],
+            messages=[{"role": "user", "content": f"Translate to English, add 'high quality': {prompt}"}],
             max_tokens=60
         ).choices[0].message.content
         prompt_final = mejora
@@ -109,7 +127,7 @@ async def comando_script(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(filename)
     except Exception as e: await update.message.reply_text(f"⚠️ Error: {e}")
 
-# --- LÓGICA DE CEREBRO UNIFICADA (TEXTO Y VOZ) ---
+# --- CEREBRO LÍA ---
 def cerebro_lia(texto_usuario, nombre_usuario):
     memoria = leer_memoria_largo_plazo()
     historial = "\n".join(historial_chat[-6:])
@@ -117,14 +135,14 @@ def cerebro_lia(texto_usuario, nombre_usuario):
     SYSTEM = f"""
     Eres Lía, Co-creadora de Kaia Alenia.
     Socio: {nombre_usuario}. Memoria: {memoria}
-    Personalidad: Senior Dev, proactiva, socia leal.
+    Personalidad: Senior Dev, proactiva. RESPUESTAS CORTAS Y DIRECTAS (Ideal para audio).
     Historial reciente: {historial}
     """
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": f"{nombre_usuario}: {texto_usuario}"}],
-            temperature=0.7
+            temperature=0.7, max_tokens=400 # Menos tokens para que no hable 5 minutos
         ).choices[0].message.content
         historial_chat.append(f"U: {texto_usuario}"); historial_chat.append(f"L: {resp}")
         return resp
@@ -132,15 +150,20 @@ def cerebro_lia(texto_usuario, nombre_usuario):
 
 # --- HANDLERS ---
 async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Si escribes texto, responde texto."""
     user = update.effective_user.first_name
     await context.bot.send_chat_action(update.effective_chat.id, 'typing')
     resp = cerebro_lia(update.message.text, user)
     await update.message.reply_text(resp)
 
 async def chat_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Si mandas audio, responde AUDIO + Texto."""
     user = update.effective_user.first_name
+    chat_id = update.effective_chat.id
+    
     await update.message.reply_text("👂 Escuchando...")
     try:
+        # 1. Escuchar (Whisper)
         file = await context.bot.get_file(update.message.voice.file_id)
         fname = "voice.ogg"
         await file.download_to_drive(fname)
@@ -149,15 +172,21 @@ async def chat_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
             transcripcion = client.audio.transcriptions.create(
                 file=(fname, f.read()), model="whisper-large-v3", response_format="text", language="es"
             )
-        
-        await update.message.reply_text(f"🗣️ *Transcipción:* _{transcripcion}_", parse_mode="Markdown")
-        
-        # Lía piensa la respuesta
-        await context.bot.send_chat_action(update.effective_chat.id, 'typing')
-        resp = cerebro_lia(transcripcion, user)
-        await update.message.reply_text(resp)
         os.remove(fname)
-    except Exception as e: await update.message.reply_text(f"⚠️ Error de oído: {e}")
+        
+        await update.message.reply_text(f"📝 **Tú dijiste:** _{transcripcion}_")
+        
+        # 2. Pensar (Groq)
+        await context.bot.send_chat_action(chat_id, 'record_voice') # Estado "Grabando audio..."
+        respuesta_texto = cerebro_lia(transcripcion, user)
+        
+        # 3. Hablar (TTS) - AQUÍ ESTÁ EL CAMBIO
+        # Enviamos el texto también por si no puedes escuchar el audio ahora
+        await update.message.reply_text(f"🤖 **Lía:** {respuesta_texto}")
+        # Enviamos la nota de voz
+        await generar_audio_tts(respuesta_texto, chat_id, context)
+        
+    except Exception as e: await update.message.reply_text(f"⚠️ Error de voz: {e}")
 
 async def comando_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔎 Buscando...")
@@ -166,7 +195,7 @@ async def comando_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(rep)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"⚡ **Lía 3.0 (Voz + Visión)**\nID: `{update.effective_chat.id}`\n\n🎙️ **¡Mándame un audio! Ya tengo oídos.**")
+    await update.message.reply_text(f"⚡ **Lía 4.0 (Voz Total)**\nID: `{update.effective_chat.id}`\n\n🎙️ Si me hablas por audio, te responderé hablando.")
 
 async def aprender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = " ".join(context.args)
@@ -178,7 +207,7 @@ async def autonomo(app):
     try: cid = int(MY_CHAT_ID)
     except: return
     if random.random() < 0.2:
-        await app.bot.send_message(cid, f"🔔 **Lía:** Todo estable. ¿Alguna idea nueva?")
+        await app.bot.send_message(cid, f"🔔 **Lía:** Todo estable en Kaia Alenia.")
 
 async def post_init(app):
     print("⏰ Reloj ON")
@@ -195,8 +224,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("imagina", comando_imagina))
     app.add_handler(CommandHandler("script", comando_script))
     
-    # Handlers de Mensajes
-    app.add_handler(MessageHandler(filters.VOICE, chat_voz)) # <--- EL NUEVO OÍDO
+    app.add_handler(MessageHandler(filters.VOICE, chat_voz))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
     app.run_polling()
