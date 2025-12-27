@@ -5,22 +5,21 @@ import random
 import requests
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InputFile
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, Application
 from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- CONFIGURACIÓN SEGURA ---
+# --- CONFIGURACIÓN ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.getenv("MY_CHAT_ID")
 
 client = Groq(api_key=GROQ_API_KEY)
-
-# --- CEREBRO (MEMORIA) ---
 ARCHIVO_MEMORIA = "memoria.txt"
 historial_chat = []
 
+# --- UTILIDADES ---
 def leer_memoria_largo_plazo():
     if not os.path.exists(ARCHIVO_MEMORIA): return "Sin datos previos."
     with open(ARCHIVO_MEMORIA, "r", encoding="utf-8") as f: return f.read()
@@ -28,231 +27,176 @@ def leer_memoria_largo_plazo():
 def guardar_recuerdo(nuevo_dato):
     with open(ARCHIVO_MEMORIA, "a", encoding="utf-8") as f: f.write(f"\n- {nuevo_dato}")
 
-# --- SERVIDOR FALSO ---
+# --- SERVIDOR ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Lia is working hard!")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Online")
     def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
+        self.send_response(200); self.end_headers()
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    print(f"🌍 Servidor web falso en puerto {port}")
-    server.serve_forever()
+    HTTPServer(('0.0.0.0', port), HealthCheckHandler).serve_forever()
 
-# --- MÓDULO 1: OJOS (ITCH.IO) ---
+# --- LÓGICA DE SCRAPING (ITCH.IO) ---
 def espiar_itchio():
-    """Busca assets gratis en Itch.io"""
-    url = "https://itch.io/game-assets/free"
     try:
+        url = "https://itch.io/game-assets/free"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             juegos = soup.find_all('div', class_='game_cell')
-            if not juegos: return "⚠️ No encontré juegos en la lista."
+            if not juegos: return "⚠️ No encontré assets."
             
-            reporte = "🎮 **Top Assets Gratuitos en Itch.io:**\n\n"
-            contador = 0
-            for juego in juegos:
-                if contador >= 5: break
-                title_div = juego.find('div', class_='game_title')
-                if not title_div: continue
-                link_tag = title_div.find('a')
-                if not link_tag: continue
-                
-                titulo = link_tag.text.strip()
-                link = link_tag.get('href')
-                desc_div = juego.find('div', class_='game_text')
-                desc_text = desc_div.text.strip().replace('\n', ' ')[:80] + "..." if desc_div else ""
-                
-                reporte += f"🔹 **{titulo}**\n📝 {desc_text}\n🔗 {link}\n\n"
-                contador += 1
+            reporte = "🎮 **Top Assets Itch.io:**\n"
+            for i, juego in enumerate(juegos[:5]):
+                titulo = juego.find('div', class_='game_title').text.strip()
+                link = juego.find('a', class_='game_title').find('a')['href']
+                reporte += f"🔹 {titulo} -> {link}\n"
             return reporte
-        return "⚠️ Error al conectar con Itch.io"
-    except Exception as e:
-        return f"⚠️ Error visual: {str(e)}"
+        return "⚠️ Error Itch.io"
+    except Exception as e: return f"⚠️ Error visual: {e}"
 
-# --- MÓDULO 2: ARTISTA (IMÁGENES) ---
+# --- LÓGICA DE IMAGEN (MEJORADA) ---
 async def comando_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Genera imágenes (Versión Robusta: Descarga primero, envía después)"""
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("🎨 **Uso:** `/imagina caballero oscuro pixel art`")
+        await update.message.reply_text("🎨 Uso: `/imagina espada pixel art`")
         return
-
-    # Mensaje de espera
-    await update.message.reply_text(f"🎨 Pintando: '{prompt}'... (Esto puede tardar unos 20 seg)")
+    await update.message.reply_text(f"🎨 Pintando '{prompt}'...")
     
-    # 1. Traducir Prompt (Mejora la calidad)
+    # Prompt Enhancer
     try:
-        traduccion = client.chat.completions.create(
+        mejora = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": f"Translate to English for image prompt, concise: {prompt}"}],
-            max_tokens=50
+            messages=[{"role": "user", "content": f"Translate to English, add 'high quality, detailed' and if pixel art add 'pixel perfect, unaliased': {prompt}"}],
+            max_tokens=60
         ).choices[0].message.content
-        prompt_final = traduccion
-    except:
-        prompt_final = prompt
+        prompt_final = mejora
+    except: prompt_final = prompt
 
-    # 2. Generar URL
-    seed = random.randint(0, 999999)
-    # width y height a 768 es más rápido y estable que 1024
-    image_url = f"https://image.pollinations.ai/prompt/{prompt_final}?seed={seed}&width=768&height=768&nologo=true"
+    image_url = f"https://image.pollinations.ai/prompt/{prompt_final}?seed={random.randint(0,999)}&width=1024&height=1024&model=flux&nologo=true"
     
-    # 3. Descargar la imagen nosotros mismos (Para evitar Timeouts de Telegram)
     try:
-        # Ejecutamos la descarga en un hilo aparte para no congelar al bot
         loop = asyncio.get_running_loop()
-        def descargar_imagen():
-            return requests.get(image_url, timeout=60) # Esperamos hasta 60 segundos
-        
-        response = await loop.run_in_executor(None, descargar_imagen)
-        
-        if response.status_code == 200:
-            # Enviamos los bytes directos
-            await update.message.reply_photo(photo=response.content, caption=f"🖼️ **Concept:** {prompt}\n🤖 **Modelo:** Pollinations AI")
-        else:
-            await update.message.reply_text(f"⚠️ La IA de dibujo falló (Error {response.status_code}). Intenta de nuevo.")
-            
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Error al procesar la imagen: {e}")
+        resp = await loop.run_in_executor(None, lambda: requests.get(image_url, timeout=60))
+        if resp.status_code == 200:
+            await update.message.reply_photo(photo=resp.content, caption=f"🖼️ {prompt}")
+        else: await update.message.reply_text("⚠️ Falló la pintura.")
+    except Exception as e: await update.message.reply_text(f"⚠️ Error: {e}")
 
-# --- MÓDULO 3: SECRETARIA (ARCHIVOS) ---
+# --- LÓGICA DE SCRIPT ---
 async def comando_script(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Genera un archivo de código descargable"""
     peticion = " ".join(context.args)
     if not peticion:
-        await update.message.reply_text("📁 **Uso:** `/script movimiento de jugador en Unity`")
+        await update.message.reply_text("📁 Uso: `/script movimiento Unity`")
         return
-
-    await update.message.reply_text("👩‍💻 Escribiendo código... dame unos segundos.")
+    await update.message.reply_text("👩‍💻 Escribiendo...")
     
     try:
-        # 1. Pedimos el código a Groq
-        prompt_code = f"Genera SOLAMENTE el código para: {peticion}. No incluyas explicaciones, ni markdown (```). Solo el código puro. Si es Unity es C#, si es Godot es GDScript. Adivina el lenguaje."
-        
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt_code}],
-            temperature=0.1 # Muy preciso
+            messages=[{"role": "user", "content": f"Genera SOLO CÓDIGO para: {peticion}. Adivina lenguaje."}],
+            temperature=0.1
         )
         codigo = completion.choices[0].message.content
+        ext = ".cs" if "using UnityEngine" in codigo else ".gd" if "extends" in codigo else ".txt"
         
-        # 2. Detectamos lenguaje y extensión
-        ext = ".txt"
-        if "using UnityEngine" in codigo or "public class" in codigo: ext = ".cs"
-        elif "extends" in codigo or "func _process" in codigo: ext = ".gd"
-        elif "import" in codigo and "def " in codigo: ext = ".py"
-        elif "<html>" in codigo: ext = ".html"
+        filename = f"Script_Lia{ext}"
+        with open(filename, "w", encoding="utf-8") as f: f.write(codigo)
+        await update.message.reply_document(document=open(filename, "rb"), caption=f"📁 Script: {peticion}")
+        os.remove(filename)
+    except Exception as e: await update.message.reply_text(f"⚠️ Error: {e}")
 
-        # 3. Creamos el archivo temporal
-        nombre_archivo = f"Script_Lia{ext}"
-        with open(nombre_archivo, "w", encoding="utf-8") as f:
-            f.write(codigo)
-        
-        # 4. Enviamos el archivo
-        await update.message.reply_document(document=open(nombre_archivo, "rb"), caption=f"📁 Aquí tienes tu script para: {peticion}")
-        
-        # 5. Limpieza (Borramos el archivo del servidor)
-        os.remove(nombre_archivo)
-        
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Error escribiendo el archivo: {e}")
-
-# --- HANDLERS Y LÓGICA PRINCIPAL ---
-async def comando_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔎 Escaneando Itch.io...")
-    loop = asyncio.get_running_loop()
-    reporte = await loop.run_in_executor(None, espiar_itchio)
-    await update.message.reply_text(reporte)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    historial_chat.clear()
-    await update.message.reply_text(
-        f"⚡ **Lía 2.0 (Artista & Dev)** Online.\nID: `{user_id}`\n\n"
-        "🆕 **Nuevos Poderes:**\n"
-        "🎨 `/imagina [idea]` -> Genero concept art.\n"
-        "📁 `/script [idea]` -> Creo archivos de código.\n"
-        "🔎 `/assets` -> Busco en Itch.io."
-    )
-
-async def aprender(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = " ".join(context.args)
-    if texto:
-        guardar_recuerdo(texto)
-        await update.message.reply_text("💾 Guardado.")
-    else:
-        await update.message.reply_text("❌ Uso: /aprende [dato]")
-
-async def chat_con_lia(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    usuario_dice = update.message.text
-    user_name = update.effective_user.first_name
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-
-    memoria_permanente = leer_memoria_largo_plazo()
-    historial_texto = "\n".join(historial_chat[-6:])
-
-    SYSTEM_PROMPT = f"""
-    Eres Lía, Co-creadora de 'Kaia Alenia'.
-    Usuario: {user_name}. Memoria: {memoria_permanente}
-    Personalidad: Senior Dev, creativa, eficiente.
-    Historial: {historial_texto}
+# --- LÓGICA DE CEREBRO UNIFICADA (TEXTO Y VOZ) ---
+def cerebro_lia(texto_usuario, nombre_usuario):
+    memoria = leer_memoria_largo_plazo()
+    historial = "\n".join(historial_chat[-6:])
+    
+    SYSTEM = f"""
+    Eres Lía, Co-creadora de Kaia Alenia.
+    Socio: {nombre_usuario}. Memoria: {memoria}
+    Personalidad: Senior Dev, proactiva, socia leal.
+    Historial reciente: {historial}
     """
     try:
-        completion = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"{user_name}: {usuario_dice}"}
-            ],
-            temperature=0.7, max_tokens=800
-        )
-        texto_lia = completion.choices[0].message.content
-        historial_chat.append(f"U: {usuario_dice}")
-        historial_chat.append(f"L: {texto_lia}")
-        await update.message.reply_text(texto_lia)
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {e}")
+            messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": f"{nombre_usuario}: {texto_usuario}"}],
+            temperature=0.7
+        ).choices[0].message.content
+        historial_chat.append(f"U: {texto_usuario}"); historial_chat.append(f"L: {resp}")
+        return resp
+    except Exception as e: return f"⚠️ Error mental: {e}"
 
-# --- INICIATIVA Y ARRANQUE ---
-async def pensamiento_autonomo(application: Application):
+# --- HANDLERS ---
+async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user.first_name
+    await context.bot.send_chat_action(update.effective_chat.id, 'typing')
+    resp = cerebro_lia(update.message.text, user)
+    await update.message.reply_text(resp)
+
+async def chat_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user.first_name
+    await update.message.reply_text("👂 Escuchando...")
+    try:
+        file = await context.bot.get_file(update.message.voice.file_id)
+        fname = "voice.ogg"
+        await file.download_to_drive(fname)
+        
+        with open(fname, "rb") as f:
+            transcripcion = client.audio.transcriptions.create(
+                file=(fname, f.read()), model="whisper-large-v3", response_format="text", language="es"
+            )
+        
+        await update.message.reply_text(f"🗣️ *Transcipción:* _{transcripcion}_", parse_mode="Markdown")
+        
+        # Lía piensa la respuesta
+        await context.bot.send_chat_action(update.effective_chat.id, 'typing')
+        resp = cerebro_lia(transcripcion, user)
+        await update.message.reply_text(resp)
+        os.remove(fname)
+    except Exception as e: await update.message.reply_text(f"⚠️ Error de oído: {e}")
+
+async def comando_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔎 Buscando...")
+    loop = asyncio.get_running_loop()
+    rep = await loop.run_in_executor(None, espiar_itchio)
+    await update.message.reply_text(rep)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"⚡ **Lía 3.0 (Voz + Visión)**\nID: `{update.effective_chat.id}`\n\n🎙️ **¡Mándame un audio! Ya tengo oídos.**")
+
+async def aprender(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t = " ".join(context.args)
+    if t: guardar_recuerdo(t); await update.message.reply_text("💾 Guardado.")
+
+# --- ARRANQUE ---
+async def autonomo(app):
     if not MY_CHAT_ID: return
-    try: chat_id_numerico = int(MY_CHAT_ID)
-    except ValueError: return
-    
-    temas = [
-        "¿Necesitas assets? Usa /assets",
-        "Tengo una idea visual... ¿probamos /imagina?",
-        "Si necesitas código limpio, pídeme un /script",
-        "Reporte: Sistemas estables. 🟢"
-    ]
+    try: cid = int(MY_CHAT_ID)
+    except: return
     if random.random() < 0.2:
-        await application.bot.send_message(chat_id=chat_id_numerico, text=f"🔔 **Lía:** {random.choice(temas)}")
+        await app.bot.send_message(cid, f"🔔 **Lía:** Todo estable. ¿Alguna idea nueva?")
 
-async def post_init(application: Application):
-    print("⏰ Reloj iniciado.")
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(pensamiento_autonomo, 'interval', hours=4, args=[application])
-    scheduler.start()
+async def post_init(app):
+    print("⏰ Reloj ON")
+    s = AsyncIOScheduler(); s.add_job(autonomo, 'interval', hours=4, args=[app]); s.start()
 
 if __name__ == '__main__':
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    print("🚀 Lía 2.0 Iniciando...")
-    
+    print("🚀 Lía Iniciando...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("aprende", aprender))
     app.add_handler(CommandHandler("assets", comando_assets))
-    app.add_handler(CommandHandler("imagina", comando_imagina)) # NUEVO
-    app.add_handler(CommandHandler("script", comando_script))   # NUEVO
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_con_lia))
+    app.add_handler(CommandHandler("imagina", comando_imagina))
+    app.add_handler(CommandHandler("script", comando_script))
+    
+    # Handlers de Mensajes
+    app.add_handler(MessageHandler(filters.VOICE, chat_voz)) # <--- EL NUEVO OÍDO
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
     app.run_polling()
-
