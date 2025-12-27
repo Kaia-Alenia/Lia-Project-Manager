@@ -223,6 +223,46 @@ async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Error generando imagen: {e}")
+        
+async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Busca assets gratis en Itch.io bajo demanda."""
+    # Si escribes "/assets musica" busca música. Si solo pones "/assets", busca pixel-art por defecto.
+    busqueda = " ".join(context.args).strip()
+    tag = busqueda if busqueda else "pixel-art"
+    
+    await update.message.reply_chat_action("typing")
+    await update.message.reply_text(f"🔍 Buscando recursos de *{tag}* en Itch.io...", parse_mode="Markdown")
+    
+    try:
+        # Usamos el tag en la URL
+        url = f"https://itch.io/game-assets/free/tag-{tag}"
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        
+        if r.status_code != 200:
+            await update.message.reply_text("⚠️ No encontré esa categoría exactamante.")
+            return
+
+        soup = BeautifulSoup(r.text, 'html.parser')
+        games = soup.find_all('div', class_='game_cell')
+        
+        if not games:
+            await update.message.reply_text("❌ No encontré nada con ese tag hoy.")
+            return
+
+        # Seleccionamos 3 al azar para dar variedad
+        num_res = min(len(games), 3)
+        picks = random.sample(games, num_res)
+        
+        mensaje = f"🎁 **Recursos Encontrados ({tag}):**\n"
+        for game in picks:
+            title = game.find('div', class_='game_title').text.strip()
+            link = game.find('a', class_='game_title').find('a')['href']
+            mensaje += f"- [{title}]({link})\n"
+            
+        await update.message.reply_text(mensaje, parse_mode="Markdown")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error buscando assets: {e}")
 
 async def cmd_conectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nuevo_repo = " ".join(context.args).strip()
@@ -383,9 +423,11 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("codear", cmd_codear))
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
+    app.add_handler(CommandHandler("assets", cmd_assets))
     
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
     print(">>> LÍA V4.0 OPERATIVA <<<")
     app.run_polling()
+
