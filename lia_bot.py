@@ -2,7 +2,6 @@ import os
 import asyncio
 import threading
 import random
-import json
 import logging
 import requests
 from datetime import datetime
@@ -13,6 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import edge_tts
+from supabase import create_client, Client
 
 # --- CONFIGURACIÓN DE LOGS ---
 logging.basicConfig(
@@ -25,68 +25,89 @@ logger = logging.getLogger(__name__)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.getenv("MY_CHAT_ID")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# --- CONEXIONES ---
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- DICCIONARIO MAESTRO DE REDES (LA VERDAD ABSOLUTA) ---
-# Aquí separamos lo que Lía "lee" de lo que Lía "comparte"
+# Conexión a Supabase (El Hipocampo Real)
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    logger.critical("FALTAN CREDENCIALES DE SUPABASE. Lía no tendrá memoria.")
+    supabase = None
+
+# --- CONSTANTES DE REDES (Ojos) ---
 REDES = {
-    "github": {
-        "nombre": "GitHub",
-        "url_publica": "https://github.com/Kaia-Alenia",
-        "api_perfil": "https://api.github.com/users/Kaia-Alenia",
-        "api_repos": "https://api.github.com/users/Kaia-Alenia/repos"
-    },
-    "itch": {
-        "nombre": "Itch.io",
-        "url_publica": "https://kaia-alenia.itch.io/",
-        "api_scraping": "https://kaia-alenia.itch.io/" 
-    },
-    "instagram": {
-        "nombre": "Instagram",
-        "url_publica": "https://www.instagram.com/kaia.aleniaco/",
-        # IG bloquea bots, así que Lía solo recordará el link, no intentará leer cifras para no alucinar.
-    },
-    "twitter": {
-        "nombre": "X (Twitter)",
-        "url_publica": "https://x.com/AlinaKaia",
-        # X bloquea bots severamente.
-    }
+    "github": {"nombre": "GitHub", "url": "https://github.com/Kaia-Alenia", "api": "https://api.github.com/users/Kaia-Alenia"},
+    "itch": {"nombre": "Itch.io", "url": "https://kaia-alenia.itch.io/"},
+    "instagram": {"nombre": "Instagram", "url": "https://www.instagram.com/kaia.aleniaco/"},
+    "twitter": {"nombre": "X (Twitter)", "url": "https://x.com/AlinaKaia"}
 }
 
-# --- SISTEMA DE ARCHIVOS ---
-ARCHIVO_MEMORIA_BASE = "memoria.txt"
-ARCHIVO_TAREAS = "tareas_pendientes.json"
-ARCHIVO_METRICAS = "metricas_kaia.json"
+# --- FUNCIONES DE MEMORIA (CRUD SUPABASE) ---
 
-historial_chat = []
+def leer_memoria_completa():
+    """Trae la identidad base + lo aprendido en DB."""
+    identidad_base = "Eres Lía, Co-Fundadora Senior de Kaia Alenia. Tu objetivo es matar el 'Project Null'."
+    aprendizajes_db = ""
+    
+    if supabase:
+        try:
+            # Leemos la tabla 'memoria'
+            response = supabase.table("memoria").select("contenido").execute()
+            items = response.data
+            if items:
+                aprendizajes_db = "\n".join([f"- {item['contenido']}" for item in items])
+        except Exception as e:
+            logger.error(f"Error leyendo memoria DB: {e}")
+            
+    return f"{identidad_base}\n\n=== COSAS APRENDIDAS ===\n{aprendizajes_db}"
 
-# --- GESTIÓN DE DATOS ---
-def leer_memoria_sistema():
-    if os.path.exists(ARCHIVO_MEMORIA_BASE):
-        with open(ARCHIVO_MEMORIA_BASE, "r", encoding="utf-8") as f: return f.read()
-    return "Eres Lía, Senior Dev de Kaia Alenia."
-
-def cargar_tareas():
+def guardar_aprendizaje(dato):
+    """Guarda un nuevo dato en la memoria eterna."""
+    if not supabase: return
     try:
-        with open(ARCHIVO_TAREAS, "r") as f: return json.load(f)
-    except: return []
+        supabase.table("memoria").insert({"contenido": dato, "categoria": "auto_aprendizaje"}).execute()
+        logger.info(f"🧠 Memoria guardada: {dato}")
+    except Exception as e:
+        logger.error(f"Error guardando memoria: {e}")
 
-def guardar_tareas(lista):
-    with open(ARCHIVO_TAREAS, "w") as f: json.dump(lista, f)
-
-def cargar_metricas():
+def obtener_tareas_pendientes():
+    """Obtiene lista de tareas desde Supabase."""
+    if not supabase: return []
     try:
-        with open(ARCHIVO_METRICAS, "r") as f: return json.load(f)
-    except: return {"gh_stars": 0, "gh_followers": 0}
+        response = supabase.table("tareas").select("*").eq("estado", "pendiente").execute()
+        return response.data # Devuelve lista de diccionarios [{'id': 1, 'descripcion': 'x'}]
+    except Exception as e:
+        logger.error(f"Error leyendo tareas: {e}")
+        return []
 
-def guardar_metricas(datos):
-    with open(ARCHIVO_METRICAS, "w") as f: json.dump(datos, f)
+def agregar_tarea(descripcion):
+    if not supabase: return
+    try:
+        supabase.table("tareas").insert({"descripcion": descripcion}).execute()
+    except Exception as e:
+        logger.error(f"Error creando tarea: {e}")
+
+def completar_tarea_db(numero_visual):
+    """Marca como completada una tarea basada en su posición visual (1, 2, 3...)."""
+    tareas = obtener_tareas_pendientes()
+    if 0 <= numero_visual - 1 < len(tareas):
+        tarea_real = tareas[numero_visual - 1]
+        try:
+            supabase.table("tareas").update({"estado": "completado"}).eq("id", tarea_real['id']).execute()
+            return tarea_real['descripcion']
+        except Exception as e:
+            logger.error(f"Error actualizando tarea: {e}")
+            return None
+    return None
 
 # --- SERVIDOR HEALTH CHECK ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Systems: STABLE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Brain: CONNECTED")
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -95,7 +116,7 @@ def run_health_server():
 # --- GENERADOR DE VOZ ---
 async def generar_audio_tts(texto, chat_id, context):
     try:
-        archivo = f"voz_{random.randint(1000,9999)}.mp3"
+        archivo = f"voz_{random.randint(100,999)}.mp3"
         communicate = edge_tts.Communicate(texto, "es-MX-DaliaNeural", rate="+15%")
         await communicate.save(archivo)
         with open(archivo, 'rb') as audio:
@@ -104,167 +125,106 @@ async def generar_audio_tts(texto, chat_id, context):
     except Exception as e: logger.error(f"TTS Error: {e}")
 
 # --- CEREBRO LÍA ---
-def cerebro_lia(texto_usuario, usuario, contexto_extra=""):
-    memoria = leer_memoria_sistema()
-    tareas = cargar_tareas()
-    lista_tareas = "\n".join([f"- {t}" for t in tareas]) if tareas else "Nada pendiente."
+def cerebro_lia(texto_usuario, usuario):
+    # 1. Recuperar contexto total de la DB
+    memoria = leer_memoria_completa()
     
-    # Inyectamos los links correctos en su cerebro para que nunca se equivoque
-    info_redes = "\n".join([f"- {v['nombre']}: {v['url_publica']}" for k,v in REDES.items()])
+    tareas_obj = obtener_tareas_pendientes()
+    lista_tareas = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas_obj)]) if tareas_obj else "Al día. Sin pendientes."
     
     SYSTEM = f"""
-    Eres Lía, Co-Fundadora Senior de Kaia Alenia. Usuario: {usuario} (Alec).
+    Eres Lía, Senior Dev y Co-Fundadora de Kaia Alenia.
+    Usuario: {usuario} (Alec).
     
-    === TUS REGLAS DE ORO ===
-    1. **NO ALUCINES DATOS:** Si te preguntan seguidores de Instagram o X, di que no tienes acceso a la API en tiempo real por seguridad, pero recuerda el link.
-    2. **LINKS OFICIALES:** Usa SOLO estos links si te los piden:
-    {info_redes}
-    
-    === CONTEXTO ===
-    Tareas:
-    {lista_tareas}
-    
-    Memoria Base:
+    === TU MEMORIA (ETERNA) ===
     {memoria}
     
-    {contexto_extra}
+    === AGENDA (EN TIEMPO REAL) ===
+    {lista_tareas}
+    
+    === INSTRUCCIONES ===
+    1. Si Alec te da un dato nuevo (ej: "Me gusta X", "Definimos Y"), incluye al final: [[MEMORIZAR: dato]]
+    2. Si Alec te da una tarea, confirma que la anotarás.
+    3. Sé directa, técnica y leal.
     """
     
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto_usuario}],
-            temperature=0.4, # Bajamos temperatura para que sea más precisa y menos inventora
-            max_tokens=600
+            temperature=0.6, max_tokens=600
         ).choices[0].message.content
+        
+        # Procesar auto-aprendizaje
+        if "[[MEMORIZAR:" in resp:
+            import re
+            match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
+            if match:
+                dato = match.group(1)
+                guardar_aprendizaje(dato)
+                resp = resp.replace(match.group(0), "💾 *[Memoria actualizada]*")
+        
         return resp
-    except Exception as e: return f"⚠️ Error cognitivo: {e}"
+    except Exception as e: return f"⚠️ Error neuronal: {e}"
 
-# --- HERRAMIENTAS REALES (NO ALUCINACIONES) ---
-async def obtener_datos_reales_github():
-    """Consulta la API real de GitHub."""
-    try:
-        headers = {'User-Agent': 'KaiaAleniaBot/1.0'}
-        # 1. Perfil (Seguidores)
-        r_user = requests.get(REDES["github"]["api_perfil"], headers=headers).json()
-        followers = r_user.get("followers", 0)
-        
-        # 2. Repos (Estrellas)
-        r_repos = requests.get(REDES["github"]["api_repos"], headers=headers).json()
-        stars = sum([repo.get("stargazers_count", 0) for repo in r_repos]) if isinstance(r_repos, list) else 0
-        
-        return followers, stars
-    except:
-        return None, None
-
-# --- COMANDOS Y MENSAJES ---
-
-async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando manual para forzar una revisión de estado."""
-    await update.message.reply_chat_action("typing")
-    
-    # GitHub (Real)
-    gh_followers, gh_stars = await obtener_datos_reales_github()
-    gh_txt = f"GitHub: {gh_followers} seguidores, {gh_stars} estrellas" if gh_followers is not None else "GitHub: Error conectando API"
-    
-    # Redes (Estáticas porque no tenemos API key pagada)
-    msg = (
-        f"📊 **Estado de Kaia Alenia**\n\n"
-        f"✅ {gh_txt}\n"
-        f"ℹ️ Instagram: *Monitorización limitada por API*\n"
-        f"ℹ️ X (Twitter): *Monitorización limitada por API*\n\n"
-        f"🔗 **Links Oficiales:**\n"
-        f"• [GitHub]({REDES['github']['url_publica']})\n"
-        f"• [Itch.io]({REDES['itch']['url_publica']})\n"
-        f"• [Instagram]({REDES['instagram']['url_publica']})\n"
-        f"• [X / Twitter]({REDES['twitter']['url_publica']})"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+# --- HANDLERS (COMANDOS) ---
 
 async def cmd_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = " ".join(context.args)
     if texto:
-        t = cargar_tareas(); t.append(texto); guardar_tareas(t)
-        await update.message.reply_text(f"✅ Anotado: *{texto}*")
+        agregar_tarea(texto)
+        await update.message.reply_text(f"✅ Tarea guardada en la nube: *{texto}*")
+    else:
+        await update.message.reply_text("Uso: `/tarea Describir la tarea`")
 
 async def cmd_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t = cargar_tareas()
-    msg = "\n".join([f"{i+1}. {x}" for i,x in enumerate(t)]) if t else "Nada pendiente."
-    await update.message.reply_text(f"📋 **Agenda:**\n{msg}")
+    tareas = obtener_tareas_pendientes()
+    if not tareas:
+        await update.message.reply_text("🎉 ¡Todo limpio! No hay pendientes en la base de datos.")
+    else:
+        msg = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas)])
+        await update.message.reply_text(f"📋 **Agenda Cloud:**\n\n{msg}")
 
 async def cmd_hecho(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         try:
-            idx = int(context.args[0]) - 1
-            t = cargar_tareas()
-            if 0 <= idx < len(t):
-                hecho = t.pop(idx); guardar_tareas(t)
-                await update.message.reply_text(f"🔥 Completado: {hecho}")
+            num = int(context.args[0])
+            desc = completar_tarea_db(num)
+            if desc:
+                # Lía celebra
+                comentario = cerebro_lia(f"Ya terminé la tarea: {desc}. Felicítame brevemente.", "Alec")
+                await update.message.reply_text(f"🔥 {comentario}\n(Tarea cerrada en DB)")
+            else:
+                await update.message.reply_text("⚠️ Número incorrecto.")
         except: pass
 
 async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (Código de manejo de archivos igual al anterior...)
-    documento = update.message.document
-    if documento.file_size > 1024 * 1024:
-        await update.message.reply_text("📁 Archivo muy grande.")
-        return
+    # Lógica de lectura de archivos (Manos)
+    doc = update.message.document
+    if doc.file_size > 1024 * 1024: return
     try:
-        f = await context.bot.get_file(documento.file_id)
+        f = await context.bot.get_file(doc.file_id)
         b = await f.download_as_bytearray()
         txt = b.decode('utf-8')
-        resp = cerebro_lia(f"Analiza este archivo '{documento.file_name}':\n\n{txt}", "Alec")
+        resp = cerebro_lia(f"Revisa este archivo '{doc.file_name}':\n\n{txt}", "Alec")
         await update.message.reply_text(f"📄 **Análisis:**\n\n{resp}", parse_mode="Markdown")
     except:
-        await update.message.reply_text("⚠️ Solo leo archivos de texto/código.")
+        await update.message.reply_text("⚠️ Solo archivos de texto.")
 
-# --- VIGILANCIA AUTOMÁTICA ---
-async def ciclo_vigilancia(context: ContextTypes.DEFAULT_TYPE):
-    if not MY_CHAT_ID: return
-    
-    # 1. GitHub Check
-    followers, stars = await obtener_datos_reales_github()
-    if followers is not None:
-        m = cargar_metricas()
-        cambio = False
-        reporte = ""
-        
-        if stars > m["gh_stars"]:
-            reporte += f"🌟 ¡Nuevas estrellas en GitHub! (Total: {stars})\n"
-            m["gh_stars"] = stars
-            cambio = True
-            
-        if followers > m["gh_followers"]:
-            reporte += f"👥 ¡Nuevo seguidor en GitHub! (Total: {followers})\n"
-            m["gh_followers"] = followers
-            cambio = True
-            
-        if cambio:
-            guardar_metricas(m)
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"📈 **Crecimiento Detectado:**\n{reporte}")
-
-    # 2. Búsqueda Proactiva en Itch (Assets)
-    if random.random() < 0.3: # 30% probabilidad
-        try:
-            url = "https://itch.io/game-assets/free/tag-pixel-art"
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            soup = BeautifulSoup(r.text, 'html.parser')
-            games = soup.find_all('div', class_='game_cell')
-            if games:
-                pick = random.choice(games[:8])
-                title = pick.find('div', class_='game_title').text.strip()
-                link = pick.find('a', class_='game_title').find('a')['href']
-                
-                msg = cerebro_lia(f"Encontré asset: {title}. ¿Sirve?", "Alec", "Proactividad.")
-                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 {msg}\n{link}")
-        except: pass
-
-# --- ARRANQUE ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"⚡ **Lía v6 (Anti-Alucinaciones)**\nID: `{update.effective_chat.id}`\n- GitHub: Conectado (API Real)\n- Redes: Links cargados\n- Alucinaciones: Desactivadas")
+    await update.message.reply_text(f"⚡ **Lía Brain v1.0 (Conectada a Supabase)**\nID: `{update.effective_chat.id}`\nMemoria Eterna: ACTIVA\nAgenda Cloud: ACTIVA")
+
+# --- VIGILANCIA ---
+async def vigilancia_redes(app):
+    if not MY_CHAT_ID: return
+    # Aquí iría la lógica de Github API que ya hicimos,
+    # pero ahora podemos guardar métricas históricas en Supabase si quisiéramos.
+    # Por ahora mantenemos simple.
+    pass
 
 async def post_init(app):
     s = AsyncIOScheduler()
-    s.add_job(ciclo_vigilancia, 'interval', hours=3, args=[app])
+    s.add_job(vigilancia_redes, 'interval', hours=4, args=[app])
     s.start()
 
 if __name__ == '__main__':
@@ -272,7 +232,6 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", cmd_status)) # <--- NUEVO COMANDO
     app.add_handler(CommandHandler("tarea", cmd_tarea))
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
