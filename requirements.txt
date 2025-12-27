@@ -1,8 +1,10 @@
 python-telegram-bot
+openai
 groq
 requests
 beautifulsoup4
-edge-tts
 apscheduler
 supabase
 PyGithub
+edge-tts
+pytz
