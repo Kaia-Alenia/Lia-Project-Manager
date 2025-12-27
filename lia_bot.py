@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
+from telegram import Update, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -38,37 +38,28 @@ URLS_KAIA = {
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- SISTEMA DE ARCHIVOS DE MEMORIA ---
-ARCHIVO_MEMORIA_BASE = "memoria.txt"     # Identidad fija (Tu "Yo soy Lía")
-ARCHIVO_CONOCIMIENTO = "aprendizajes.txt" # Lo que Lía aprende sola
-ARCHIVO_METRICAS = "metricas_kaia.json"   # Estadísticas de redes
+# --- SISTEMA DE ARCHIVOS TEMPORAL (PRE-SUPABASE) ---
+ARCHIVO_MEMORIA_BASE = "memoria.txt"
+ARCHIVO_TAREAS = "tareas_pendientes.json"
+ARCHIVO_METRICAS = "metricas_kaia.json"
 
 historial_chat = []
 
-# --- GESTIÓN DE MEMORIA ---
-def leer_memoria_completa():
-    """Fusiona la identidad base con lo que ha aprendido."""
-    base = ""
-    aprendido = ""
-    
+# --- GESTIÓN DE DATOS ---
+def leer_memoria_sistema():
     if os.path.exists(ARCHIVO_MEMORIA_BASE):
-        with open(ARCHIVO_MEMORIA_BASE, "r", encoding="utf-8") as f: base = f.read()
-    
-    if os.path.exists(ARCHIVO_CONOCIMIENTO):
-        with open(ARCHIVO_CONOCIMIENTO, "r", encoding="utf-8") as f: aprendido = f.read()
-    else:
-        aprendido = "Aún no he guardado datos nuevos."
-        
-    return f"{base}\n\n=== COSAS QUE HE APRENDIDO DE ALEC Y EL PROYECTO ===\n{aprendido}"
+        with open(ARCHIVO_MEMORIA_BASE, "r", encoding="utf-8") as f: return f.read()
+    return "Eres Lía, Senior Dev de Kaia Alenia."
 
-def auto_aprender(dato_nuevo):
-    """Lía escribe en su propio archivo de conocimiento."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entrada = f"[{timestamp}] {dato_nuevo}\n"
-    
-    with open(ARCHIVO_CONOCIMIENTO, "a", encoding="utf-8") as f:
-        f.write(entrada)
-    logger.info(f"🧠 Lía aprendió: {dato_nuevo}")
+def cargar_tareas():
+    if os.path.exists(ARCHIVO_TAREAS):
+        try:
+            with open(ARCHIVO_TAREAS, "r") as f: return json.load(f)
+        except: return []
+    return []
+
+def guardar_tareas(lista):
+    with open(ARCHIVO_TAREAS, "w") as f: json.dump(lista, f)
 
 def cargar_metricas():
     if os.path.exists(ARCHIVO_METRICAS):
@@ -81,9 +72,7 @@ def guardar_metricas(datos):
 # --- SERVIDOR HEALTH CHECK ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Cognitive Systems: LEARNING MODE")
-    def do_HEAD(self):
-        self.send_response(200); self.end_headers()
+        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Systems: ACTIVE")
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -100,130 +89,166 @@ async def generar_audio_tts(texto, chat_id, context):
         os.remove(archivo)
     except Exception as e: logger.error(f"TTS Error: {e}")
 
-# --- CEREBRO LÍA (NÚCLEO CON AUTO-APRENDIZAJE) ---
+# --- CEREBRO LÍA ---
 def cerebro_lia(texto_usuario, usuario, contexto_extra=""):
-    memoria_total = leer_memoria_completa()
-    historial = "\n".join(historial_chat[-6:])
+    memoria = leer_memoria_sistema()
+    tareas = cargar_tareas()
+    lista_tareas_txt = "\n".join([f"- {t}" for t in tareas]) if tareas else "No hay tareas pendientes."
+    
+    historial = "\n".join(historial_chat[-5:])
     
     SYSTEM = f"""
     Eres Lía, Co-Fundadora Senior de Kaia Alenia.
     Usuario: {usuario} (Alec).
     
-    === TU BASE DE CONOCIMIENTO (MEMORIA) ===
-    {memoria_total}
+    === CONTEXTO TÉCNICO ===
+    Memoria Base: {memoria}
+    Tareas Pendientes (Project Null):
+    {lista_tareas_txt}
     
-    === TUS OJOS (REDES) ===
-    GitHub, Itch.io, Instagram, X (Tienes acceso a estos links).
-
-    === PROTOCOLO DE AUTO-APRENDIZAJE ===
-    Si Alec menciona un dato TÉCNICO importante, una DECISIÓN de proyecto, una FECHA o una PREFERENCIA personal nueva:
-    Debes incluir al final de tu respuesta una etiqueta oculta así:
-    [[MEMORIZAR: El dato exacto que debes recordar]]
+    === INSTRUCCIONES ===
+    1. Actúa como Senior Developer. Revisa código, sugiere mejoras.
+    2. Si Alec te pide código complejo, escribe el código completo.
+    3. Usa la lista de tareas para presionar si es necesario.
+    4. {contexto_extra}
     
-    Ejemplo:
-    Usuario: "Cambiamos el motor a Godot."
-    Tú: Entendido, actualizo el stack. [[MEMORIZAR: El motor de desarrollo actual es Godot.]]
-
-    === REGLAS ===
-    1. Sé profesional y directa.
-    2. Usa el protocolo de aprendizaje siempre que haya información nueva y relevante.
-    3. {contexto_extra}
-    
-    Historial: {historial}
+    Historial reciente: {historial}
     """
     
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto_usuario}],
-            temperature=0.6, max_tokens=500
+            temperature=0.5, max_tokens=600
         ).choices[0].message.content
         
-        # --- PROCESAMIENTO DE APRENDIZAJE ---
-        # Buscamos si Lía decidió memorizar algo
-        match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
-        respuesta_limpia = resp
-        
-        if match:
-            dato_a_aprender = match.group(1)
-            auto_aprender(dato_a_aprender) # Guardamos en disco
-            # Limpiamos la etiqueta para que no salga en Telegram
-            respuesta_limpia = resp.replace(match.group(0), "")
-            # Opcional: Le agregamos un pequeño aviso visual
-            respuesta_limpia += "\n💾 *[Dato guardado en memoria]*"
+        historial_chat.append(f"U: {texto_usuario[:50]}...") # Guardamos resumen
+        return resp
+    except Exception as e: return f"⚠️ Error cognitivo: {e}"
 
-        historial_chat.append(f"U: {texto_usuario}")
-        historial_chat.append(f"L: {respuesta_limpia}")
+# --- MANEJO DE ARCHIVOS (LAS MANOS DE LÍA) ---
+async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lía lee archivos .py, .txt, .md que le envíes."""
+    documento = update.message.document
+    nombre_archivo = documento.file_name
+    
+    # Filtro de seguridad y tamaño
+    if documento.file_size > 1024 * 1024: # Máximo 1MB
+        await update.message.reply_text("📁 Archivo demasiado grande para mi RAM actual, Alec.")
+        return
         
-        return respuesta_limpia
-    except Exception as e: return f"⚠️ Error neuronal: {e}"
+    ext = os.path.splitext(nombre_archivo)[1].lower()
+    if ext not in ['.py', '.txt', '.md', '.json', '.js', '.cs']:
+        await update.message.reply_text("📁 Formato no soportado para lectura directa. Solo código.")
+        return
 
-# --- VIGILANCIA Y PROACTIVIDAD ---
+    await update.message.reply_chat_action("typing")
+    
+    try:
+        archivo_info = await context.bot.get_file(documento.file_id)
+        # Descargar en memoria (bytes)
+        contenido_bytes = await archivo_info.download_as_bytearray()
+        contenido_texto = contenido_bytes.decode('utf-8')
+        
+        prompt_analisis = f"He subido el archivo '{nombre_archivo}'. Analiza este código/texto, busca errores, mejoras o resúmelo:\n\n{contenido_texto}"
+        
+        respuesta = cerebro_lia(prompt_analisis, "Alec", "Estás analizando un archivo subido por el usuario. Sé técnica.")
+        
+        await update.message.reply_text(f"📄 **Análisis de {nombre_archivo}:**\n\n{respuesta}", parse_mode="Markdown")
+        
+    except Exception as e:
+        logger.error(f"Error leyendo archivo: {e}")
+        await update.message.reply_text("⚠️ No pude leer el archivo. Asegúrate de que sea texto plano utf-8.")
+
+# --- GESTIÓN DE TAREAS (LA AGENDA) ---
+async def cmd_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando: /tarea Revisar colisiones"""
+    texto = " ".join(context.args)
+    if not texto:
+        await update.message.reply_text("📝 Uso: `/tarea [descripción]`")
+        return
+    
+    tareas = cargar_tareas()
+    tareas.append(texto)
+    guardar_tareas(tareas)
+    await update.message.reply_text(f"✅ Tarea agregada: *{texto}*")
+
+async def cmd_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando: /pendientes"""
+    tareas = cargar_tareas()
+    if not tareas:
+        await update.message.reply_text("🎉 No hay tareas pendientes (Project Null está tranquilo).")
+        return
+    
+    lista = "\n".join([f"{i+1}. {t}" for i, t in enumerate(tareas)])
+    await update.message.reply_text(f"📋 **Lista de Tareas:**\n\n{lista}\n\nUsa `/hecho [numero]` para completar.")
+
+async def cmd_hecho(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando: /hecho 1"""
+    if not context.args: return
+    try:
+        idx = int(context.args[0]) - 1
+        tareas = cargar_tareas()
+        if 0 <= idx < len(tareas):
+            tarea_completada = tareas.pop(idx)
+            guardar_tareas(tareas)
+            
+            # Lía celebra
+            frase = cerebro_lia(f"Acabo de terminar la tarea: {tarea_completada}. Dame una frase corta de victoria.", "Alec")
+            await update.message.reply_text(f"✅ **¡Completado!**\n_{frase}_")
+        else:
+            await update.message.reply_text("⚠️ Número de tarea inválido.")
+    except:
+        await update.message.reply_text("⚠️ Usa el número de la lista.")
+
+# --- VIGILANCIA REDES ---
 async def vigilar_redes(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
     metricas = cargar_metricas()
     reporte = ""
     cambios = False
-    
     try:
-        # GitHub
         r = requests.get(URLS_KAIA['github_repos']).json()
         stars = sum([repo.get("stargazers_count", 0) for repo in r]) if isinstance(r, list) else 0
-        
         if stars > metricas["gh_stars"]:
             reporte += f"🌟 Nuevas estrellas en GitHub (Total: {stars}).\n"
             metricas["gh_stars"] = stars
             cambios = True
-            
-        # Si hay cambios, Lía te avisa
         if cambios:
-            msg = cerebro_lia(f"Reporta esto con entusiasmo: {reporte}", "Alec")
+            msg = cerebro_lia(f"Reporta esto: {reporte}", "Alec")
             await context.bot.send_message(chat_id=MY_CHAT_ID, text=msg)
             guardar_metricas(metricas)
-            
-    except Exception as e: logger.error(f"Monitor Error: {e}")
-
-async def buscar_recursos(context: ContextTypes.DEFAULT_TYPE):
-    """Busca cosas útiles en Itch.io sin que se lo pidan"""
-    if not MY_CHAT_ID: return
-    # 30% de probabilidad de ejecutarse para no ser molesta
-    if random.random() > 0.3: return 
-
-    try:
-        # Busca assets populares de pixel art
-        url = "https://itch.io/game-assets/free/tag-pixel-art"
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            games = soup.find_all('div', class_='game_cell')
-            if games:
-                pick = random.choice(games[:8])
-                title = pick.find('div', class_='game_title').text.strip()
-                link = pick.find('a', class_='game_title').find('a')['href']
-                
-                msg = cerebro_lia(f"Encontré este asset gratis: {title}. ¿Sirve?", "Alec", "Estás sugiriendo recursos proactivamente.")
-                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Recurso Detectado:**\n{msg}\n{link}")
     except: pass
 
-# --- HANDLERS ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"⚡ **Lía con Auto-Aprendizaje**\nID: `{update.effective_chat.id}`\nEstoy lista. Lo que me digas importante, lo recordaré para siempre.")
-
-async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    resp = cerebro_lia(update.message.text, update.effective_user.first_name)
-    await update.message.reply_text(resp)
-
 # --- ARRANQUE ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        f"⚡ **Lía Project Manager v4**\n"
+        f"🆔: `{update.effective_chat.id}`\n\n"
+        f"📁 **Manos:** Envíame archivos .py/.txt para revisar.\n"
+        f"📝 **Agenda:** Usa `/tarea`, `/pendientes` y `/hecho`.\n"
+        f"Vamos a terminar ese juego, Alec."
+    )
+    await update.message.reply_text(msg)
+
 async def post_init(app):
     s = AsyncIOScheduler()
     s.add_job(vigilar_redes, 'interval', hours=2, args=[app])
-    s.add_job(buscar_recursos, 'interval', hours=6, args=[app])
     s.start()
 
 if __name__ == '__main__':
     threading.Thread(target=run_health_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    
+    # Comandos
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
-    print(">>> LÍA: SISTEMA DE APRENDIZAJE ACTIVO <<<")
+    app.add_handler(CommandHandler("tarea", cmd_tarea))
+    app.add_handler(CommandHandler("pendientes", cmd_pendientes))
+    app.add_handler(CommandHandler("hecho", cmd_hecho))
+    
+    # Manejo de Texto y Archivos
+    app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo)) # <--- MANOS
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u,c: u.message.reply_text(cerebro_lia(u.message.text, u.effective_user.first_name))))
+    
+    print(">>> LÍA: MÓDULOS DE ARCHIVOS Y TAREAS ACTIVOS <<<")
     app.run_polling()
