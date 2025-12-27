@@ -158,7 +158,12 @@ def cerebro_lia(texto, usuario):
        [[FILE: ruta/archivo.ext]]
        ...codigo...
        [[ENDFILE]]
-    """
+4. RESTRICTIONS:
+   - NO stdlib.h, stdio.h, time.h.
+   - NO printf, malloc, rand(), time(), SetPixel(), RGB().
+   - Use custom LCG for random. Write directly to VRAM.
+   - FORMAT: Inside [[FILE]] blocks, DO NOT use markdown ticks (```). Write RAW code only.
+"""
     
     try:
         resp = client.chat.completions.create(
@@ -309,14 +314,23 @@ async def chat_texto(u, c):
     await u.message.reply_chat_action("typing")
     resp = cerebro_lia(u.message.text, u.effective_user.first_name)
     
-    # Procesar Archivos
+    # --- FILTRO INTELIGENTE DE ARCHIVOS ---
+    # Detectamos el bloque [[FILE]]...[[ENDFILE]]
     acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
     msgs = []
+    
     if acciones:
         for ruta, contenido in acciones:
-            res = subir_archivo_github(ruta.strip(), contenido.strip())
+            # 1. LIMPIEZA DE MARKDOWN (La corrección clave)
+            # Quitamos ```c, ```h, o ``` sueltos que Lía haya puesto por error
+            contenido_limpio = re.sub(r"```[a-z]*", "", contenido).replace("```", "").strip()
+            
+            # 2. Subida a GitHub
+            res = subir_archivo_github(ruta.strip(), contenido_limpio)
             msgs.append(f"🛠️ {res}")
-            resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"\n*(Code applied to {ruta})*\n")
+            
+            # 3. Feedback visual en el chat (Ocultamos el código largo)
+            resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"\n*(Código aplicado en {ruta})*\n")
             
     await u.message.reply_text(resp)
     if msgs: await u.message.reply_text("\n".join(msgs), parse_mode="Markdown")
@@ -358,3 +372,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.2 RESTORED & OPTIMIZED <<<")
     app.run_polling()
+
