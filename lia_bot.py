@@ -29,7 +29,6 @@ MY_CHAT_ID = os.getenv("MY_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-# Soportamos ambos nombres de variable por si acaso
 GITHUB_REPO = os.getenv("GITHUB_REPO") or os.getenv("REPO_NAME")
 
 # --- CLIENTES ---
@@ -100,16 +99,16 @@ def crear_issue_github(titulo, body, labels=[]):
     except: return None
 
 def subir_archivo_github(path, cont, msg="Dev: Update por Lía"):
-    if not repo_obj: return None
+    if not repo_obj: return "❌ Error: No hay repo conectado."
     try:
         try:
             c = repo_obj.get_contents(path)
             repo_obj.update_file(c.path, msg, cont, c.sha)
-            return f"Actualizado: {path}"
+            return f"Actualizado: `{path}`"
         except:
             repo_obj.create_file(path, msg, cont)
-            return f"Creado: {path}"
-    except: return None
+            return f"Creado: `{path}`"
+    except Exception as e: return f"❌ Error GitHub: {e}"
 
 def obtener_metricas_github_real():
     if not gh_client: return 0, 0
@@ -119,7 +118,7 @@ def obtener_metricas_github_real():
         return u.followers, sum([x.stargazers_count for x in r])
     except: return 0, 0
 
-# --- CEREBRO ---
+# --- CEREBRO (LÓGICA ACTUALIZADA) ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ No tengo cerebro (Falta GROQ_API_KEY)"
     memoria = leer_memoria_completa()
@@ -129,25 +128,39 @@ def cerebro_lia(texto, usuario):
     
     SYSTEM = f"""
     {memoria}
-    [CONTEXTO] Repo: {repo_name} | Agenda: {lista_tareas} | Cache Código: {len(ultimo_codigo_leido)} chars.
-    [ROL] Experta en Game Dev (Godot/Python) y PM.
-    [REGLAS]
-    1. Código limpio y modular.
-    2. Si hay una idea de diseño clave, escribe: [[MEMORIZAR: idea]].
-    3. Usa /bug o /feature para reportes.
+    [CONTEXTO] Repo: {repo_name} | Tareas: {lista_tareas}
+    [ROL] Experta en Game Dev (Godot/Python/C/GBA) y PM.
+    
+    [HERRAMIENTAS AUTOMÁTICAS - ÚSALAS SIEMPRE QUE TE PIDAN CÓDIGO]
+    1. Para GUARDAR una idea clave:
+       [[MEMORIZAR: la idea aqui]]
+       
+    2. Para CREAR o ACTUALIZAR un archivo en el repositorio (GitHub):
+       Debes escribir el bloque EXACTAMENTE así:
+       [[FILE: ruta/del/archivo.ext]]
+       contenido_del_codigo_aqui
+       [[ENDFILE]]
+       
+    [IMPORTANTE]
+    - Si el usuario pide crear código, NO solo lo muestres. Usa el bloque [[FILE:...]] para crearlo real.
+    - No uses bloques markdown (```) DENTRO del bloque [[FILE]]. Pon el código crudo.
+    - Puedes crear múltiples archivos en una sola respuesta.
     """
+    
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto}],
-            temperature=0.5
+            temperature=0.4
         ).choices[0].message.content
         
+        # Procesar Memorias
         if "[[MEMORIZAR:" in resp:
             match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
             if match:
                 guardar_aprendizaje(match.group(1))
                 resp = resp.replace(match.group(0), "💾 *[Idea Guardada]*")
+        
         return resp
     except Exception as e: return f"⚠️ Error: {e}"
 
@@ -162,12 +175,11 @@ async def generar_audio_tts(texto, chat_id, context):
 
 # --- PROACTIVIDAD ---
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
-    """Busca recursos automáticamente cada 4 horas."""
     if not MY_CHAT_ID: return
     try:
-        # Busca Pixel Art nuevo con Header para evitar bloqueo
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        r = requests.get("https://itch.io/game-assets/free/tag-pixel-art", headers=headers, timeout=10)
+        # CORREGIDO: URL limpia sin markdown
+        r = requests.get("[https://itch.io/game-assets/free/tag-pixel-art](https://itch.io/game-assets/free/tag-pixel-art)", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
@@ -184,61 +196,38 @@ async def post_init(app):
 
 # --- COMANDOS ---
 
-# 1. IMAGINA (CORREGIDO EL ERROR FLOAT)
 async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("🎨 Dime qué quieres que imagine. Ej: /imagina paisaje cyberpunk")
+        await update.message.reply_text("🎨 Uso: `/imagina robot`")
         return
-
-    msg = await update.message.reply_text(f"🎨 Imaginando: '{prompt}'...")
-    
-    # CORRECCIÓN: Usamos entero (1000000) en vez de notación científica (1e6)
+    msg = await update.message.reply_text(f"🎨 Imaginando '{prompt}'...")
     seed = random.randint(1, 1000000)
-    
-    image_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
-    
+    # CORREGIDO: URL limpia sin markdown
+    image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt.replace(' ', '%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
         response = requests.get(image_url, timeout=20)
         if response.status_code == 200:
             await update.message.reply_photo(photo=response.content)
             await msg.delete()
-        else:
-            await msg.edit_text(f"⚠️ Error al pintar (Status: {response.status_code}).")
-    except Exception as e:
-        print(f"Error Imagina: {e}")
-        await msg.edit_text("⚠️ Lía se tropezó intentando dibujar. Intenta de nuevo.")
+        else: await msg.edit_text("⚠️ Error generando imagen.")
+    except: await msg.edit_text("⚠️ Error de conexión.")
 
-# 2. ASSETS (CORREGIDO HEADERS)
 async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tag = " ".join(context.args).strip() or "pixel-art"
     await update.message.reply_chat_action("typing")
-    
-    # CORRECCIÓN: Headers añadidos aquí
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(f"https://itch.io/game-assets/free/tag-{tag}", headers=headers, timeout=10)
+        # CORREGIDO: URL limpia sin markdown
+        r = requests.get(f"[https://itch.io/game-assets/free/tag-](https://itch.io/game-assets/free/tag-){tag}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
-        
         if games:
-            # Tomamos hasta 3
             picks = random.sample(games, min(len(games), 3))
-            msg_lines = []
-            for g in picks:
-                title = g.find('div', 'game_title').text.strip()
-                link = g.find('a', 'game_title').find('a')['href']
-                msg_lines.append(f"- [{title}]({link})")
-            
-            await update.message.reply_text(f"🔍 **{tag}:**\n" + "\n".join(msg_lines), parse_mode="Markdown")
-        else:
-            await update.message.reply_text("❌ Nada encontrado.")
-    except Exception as e:
-        print(f"Error Assets: {e}")
-        await update.message.reply_text("❌ Error conectando a Itch.io.")
+            msg = "\n".join([f"- [{g.find('div', 'game_title').text.strip()}]({g.find('a', 'game_title').find('a')['href']})" for g in picks])
+            await update.message.reply_text(f"🔍 **{tag}:**\n{msg}", parse_mode="Markdown")
+        else: await update.message.reply_text("❌ Nada encontrado.")
+    except: await update.message.reply_text("❌ Error Itch.io")
 
 async def cmd_arbol(u, c):
     if not repo_obj: return await u.message.reply_text("❌ Desconectado")
@@ -261,69 +250,29 @@ async def cmd_arbol(u, c):
         await u.message.reply_text(msg)
     except: await u.message.reply_text("Error leyendo repo.")
 
-# 3. LEER ARCHIVO (VERSION ROBUSTA CON DEBUG)
 async def cmd_leer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("📂 Uso: /leer <ruta_archivo>")
-        return
-
+    if not context.args: return await update.message.reply_text("📂 Uso: /leer archivo.py")
     file_path = context.args[0]
-    
-    if not repo_obj:
-        await update.message.reply_text("⚠️ No estoy conectada a un repositorio.")
-        return
-
+    if not repo_obj: return await update.message.reply_text("⚠️ Sin repo.")
     try:
-        # Intentamos obtener el contenido
         contents = repo_obj.get_contents(file_path)
-        
-        # Decodificamos el archivo
         code = contents.decoded_content.decode("utf-8")
-        
-        # Guardamos en memoria
         global ultimo_codigo_leido
         ultimo_codigo_leido = code
-        
-        # Cortamos si es muy largo
-        if len(code) > 3000:
-            code = code[:3000] + "\n... (archivo truncado)"
-            
-        await update.message.reply_text(f"📄 **{file_path}**:\n```python\n{code}\n```", parse_mode="Markdown")
-        
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Error GitHub: {error_msg}")
-        if "404" in error_msg:
-            await update.message.reply_text("❌ Archivo no encontrado.")
-        else:
-            await update.message.reply_text(f"⚠️ Error leyendo archivo: {error_msg}")
-
-async def cmd_review(u, c):
-    path = " ".join(c.args).strip()
-    if not path or not repo_obj: return
-    await u.message.reply_chat_action("typing")
-    try:
-        cont = repo_obj.get_contents(path).decoded_content.decode("utf-8")
-        prompt = f"ACTUA COMO SENIOR DEV. Review de:\n{cont[:3000]}"
-        resp = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role":"user", "content":prompt}]).choices[0].message.content
-        await u.message.reply_text(f"🧐 **Review:**\n{resp}", parse_mode="Markdown")
-    except: await u.message.reply_text("Error en review.")
+        if len(code) > 3000: code = code[:3000] + "\n... (truncado)"
+        await update.message.reply_text(f"📄 **{file_path}**:\n```\n{code}\n```", parse_mode="Markdown")
+    except Exception as e: await update.message.reply_text(f"⚠️ Error: {e}")
 
 async def cmd_run(u, c):
     code = u.message.text.replace("/run", "").strip()
-    # Filtro de seguridad básico
-    if any(x in code for x in ["os.system", "subprocess", "rm -rf"]): 
-        return await u.message.reply_text("⛔ Prohibido.")
-    
+    if any(x in code for x in ["os.system", "subprocess", "rm -rf"]): return await u.message.reply_text("⛔ Prohibido.")
     old = sys.stdout
     sys.stdout = new = io.StringIO()
     try:
         exec(code)
         await u.message.reply_text(f"🐍 Output:\n```\n{new.getvalue()}\n```", parse_mode="Markdown")
-    except Exception as e: 
-        await u.message.reply_text(f"💥 Error: {e}")
-    finally: 
-        sys.stdout = old
+    except Exception as e: await u.message.reply_text(f"💥 Error: {e}")
+    finally: sys.stdout = old
 
 async def cmd_codear(u, c):
     txt = u.message.text.replace("/codear ", "").strip()
@@ -332,7 +281,6 @@ async def cmd_codear(u, c):
         res = subir_archivo_github(f, cont)
         await u.message.reply_text(f"🚀 {res}" if res else "❌ Error.")
 
-# --- COMANDOS SIMPLES ---
 async def cmd_conectar(u, c):
     global repo_obj
     try: repo_obj = gh_client.get_repo(c.args[0])
@@ -345,32 +293,58 @@ async def cmd_hecho(u, c):
     if c.args: cerrar_tarea_db(int(c.args[0])); await u.message.reply_text("🔥")
 async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
-    await u.message.reply_text(f"📊 **Lía v5.1**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
+    await u.message.reply_text(f"📊 **Lía v5.2 (Auto-Coder)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
-# --- HANDLERS TEXTO ---
+# --- HANDLERS TEXTO (LA MAGIA ESTÁ AQUÍ) ---
 async def recibir_archivo(u, c):
     if u.message.document.file_size < 1e6:
         f = await c.bot.get_file(u.message.document.file_id)
         txt = (await f.download_as_bytearray()).decode()
         global ultimo_codigo_leido
         ultimo_codigo_leido = txt
-        await u.message.reply_text(cerebro_lia(f"Analiza:\n{txt}", "Alec"), parse_mode="Markdown")
+        await u.message.reply_text(cerebro_lia(f"Analiza:\n{txt}", "User"), parse_mode="Markdown")
 
 async def chat_texto(u, c):
     user_name = u.effective_user.first_name
+    
+    # 1. Pensar respuesta
+    await u.message.reply_chat_action("typing")
     resp = cerebro_lia(u.message.text, user_name)
+    
+    # 2. Detectar si Lía quiere crear archivos ([[FILE: ...]] ... [[ENDFILE]])
+    # Usamos regex para encontrar bloques de código que ella quiera subir
+    acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
+    
+    mensajes_accion = []
+    
+    if acciones:
+        for ruta, contenido in acciones:
+            # Ejecutar la subida a GitHub
+            resultado = subir_archivo_github(ruta.strip(), contenido.strip(), msg=f"Lía Auto-Dev: {ruta}")
+            mensajes_accion.append(f"🛠️ {resultado}")
+            
+            # Limpiar la respuesta para que no se vea el bloque feo en el chat
+            bloque_completo = f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]"
+            # Reemplazamos el bloque por una nota bonita
+            resp = resp.replace(bloque_completo, f"\n*(Archivo {ruta} subido al repo)*\n")
+
+    # 3. Enviar respuesta normal
     await u.message.reply_text(resp)
+    
+    # 4. Enviar confirmaciones de acciones (si hubo)
+    if mensajes_accion:
+        await u.message.reply_text("\n".join(mensajes_accion), parse_mode="Markdown")
+        
+    # 5. Audio ocasional
     if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
 
-# --- SERVER WEB (Health Check Robusto) ---
+# --- SERVER WEB ---
 class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass 
-    
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
-        
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
@@ -382,35 +356,21 @@ def run_server():
 
 # --- MAIN ---
 if __name__ == '__main__':
-    # 1. Iniciar Servidor Web (Hilo separado)
     threading.Thread(target=run_server, daemon=True).start()
-    
-    # 2. Configurar Bot
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    # 3. Registrar Comandos
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía Lista.")), 
-        ("status", cmd_status), 
-        ("conectar", cmd_conectar),
-        ("imagina", cmd_imagina), # Corregido
-        ("assets", cmd_assets), # Corregido
-        ("arbol", cmd_arbol), 
-        ("leer", cmd_leer), # Corregido (Versión robusta)
-        ("review", cmd_review),
-        ("run", cmd_run), 
-        ("codear", cmd_codear), 
-        ("tarea", cmd_tarea), 
-        ("pendientes", cmd_pendientes), 
-        ("hecho", cmd_hecho),
-        ("bug", lambda u,c: crear_issue_github(f"🐛 {' '.join(c.args)}", "Lía Bot", ["bug"])),
-        ("feature", lambda u,c: crear_issue_github(f"✨ {' '.join(c.args)}", "Lía Bot", ["enhancement"]))
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v5.2 Lista.")), 
+        ("status", cmd_status), ("conectar", cmd_conectar),
+        ("imagina", cmd_imagina), ("assets", cmd_assets),
+        ("arbol", cmd_arbol), ("leer", cmd_leer),
+        ("run", cmd_run), ("codear", cmd_codear), 
+        ("tarea", cmd_tarea), ("pendientes", cmd_pendientes), ("hecho", cmd_hecho),
     ]
-            
     for c, f in cmds: app.add_handler(CommandHandler(c, f))
     
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA RESTAURADA Y CORREGIDA AL 100% <<<")
+    print(">>> LÍA v5.2 CON MANOS AUTOMÁTICAS INICIADA <<<")
     app.run_polling()
