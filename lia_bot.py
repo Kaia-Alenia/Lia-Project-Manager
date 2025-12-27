@@ -17,7 +17,7 @@ from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import edge_tts
 from supabase import create_client, Client
-from github import Github, Auth # Actualizado para Auth moderno
+from github import Github, Auth 
 
 # --- LOGS ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -41,7 +41,7 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e: logger.error(f"Error Supabase: {e}")
 
-# GitHub (Auth Actualizado)
+# GitHub
 gh_client = None
 repo_obj = None
 if GITHUB_TOKEN:
@@ -58,7 +58,7 @@ if GITHUB_TOKEN:
 # --- MEMORIA VOLÁTIL ---
 ultimo_codigo_leido = ""
 
-# --- DOCUMENTACIÓN TÉCNICA (CEREBRO SENIOR) ---
+# --- DOCUMENTACIÓN TÉCNICA (CEREBRO SENIOR + NO LAZY) ---
 GBA_SPECS = """
 [HARDWARE SPECS - GBA BARE METAL]
 1. MEMORY: VRAM=0x06000000 (u16 array), IO=0x04000000.
@@ -72,6 +72,7 @@ GBA_SPECS = """
    - NO stdlib.h, stdio.h, time.h.
    - NO printf, malloc, rand(), time(), SetPixel(), RGB().
    - Use custom LCG for random. Write directly to VRAM.
+   - FORMAT: Inside [[FILE]] blocks, DO NOT use markdown ticks (```). Write RAW code only.
 """
 
 # --- FUNCIONES DB ---
@@ -136,7 +137,7 @@ def obtener_metricas_github_real():
         return u.followers, sum([x.stargazers_count for x in r])
     except: return 0, 0
 
-# --- CEREBRO (LÓGICA ACTUALIZADA) ---
+# --- CEREBRO (SISTEMA ANTI-PEREZA) ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ No tengo cerebro (Falta GROQ_API_KEY)"
     
@@ -145,6 +146,7 @@ def cerebro_lia(texto, usuario):
     lista_tareas = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas)]) if tareas else "Al día."
     repo_name = repo_obj.full_name if repo_obj else "Desconectado"
     
+    # --- REGLAS ESTRICTAS ANTI-PLACEHOLDERS ---
     SYSTEM = f"""
     {memoria}
     [CONTEXTO] Repo: {repo_name} | Tareas: {lista_tareas}
@@ -152,18 +154,19 @@ def cerebro_lia(texto, usuario):
     {GBA_SPECS}
     
     [ROL: PRINCIPAL ENGINEER]
-    1. Si te piden código GBA/C, adhiérete ESTRICTAMENTE a las specs de arriba. NO uses librerías estándar.
+    1. Si te piden código GBA/C, adhiérete ESTRICTAMENTE a las specs de arriba.
     2. Si el usuario te corrige, analiza el error y arréglalo sin excusas.
-    3. Para código, usa SIEMPRE:
+    3. **REGLA SUPREMA: NO USES PLACEHOLDERS.**
+       - NUNCA escribas "// ... resto del código ...".
+       - NUNCA escribas "// Código para restaurar casilla".
+       - SIEMPRE escribe el archivo COMPLETO, línea por línea, función por función.
+       - Si modificas una sola línea, debes reescribir TODO el archivo para que sea válido.
+    
+    4. Para entregar código, usa SIEMPRE:
        [[FILE: ruta/archivo.ext]]
-       ...codigo...
+       ...CODIGO COMPLETO...
        [[ENDFILE]]
-4. RESTRICTIONS:
-   - NO stdlib.h, stdio.h, time.h.
-   - NO printf, malloc, rand(), time(), SetPixel(), RGB().
-   - Use custom LCG for random. Write directly to VRAM.
-   - FORMAT: Inside [[FILE]] blocks, DO NOT use markdown ticks (```). Write RAW code only.
-"""
+    """
     
     try:
         resp = client.chat.completions.create(
@@ -300,9 +303,9 @@ async def cmd_hecho(u, c):
     if c.args: cerrar_tarea_db(int(c.args[0])); await u.message.reply_text("🔥")
 async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
-    await u.message.reply_text(f"📊 **Lía v7.2 (Restored)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
+    await u.message.reply_text(f"📊 **Lía v7.4 (No Lazy)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
-# --- HANDLERS TEXTO ---
+# --- HANDLERS TEXTO (CON FILTRO ANTI-BASURA) ---
 async def recibir_archivo(u, c):
     if u.message.document.file_size < 1e6:
         f = await c.bot.get_file(u.message.document.file_id)
@@ -315,36 +318,26 @@ async def chat_texto(u, c):
     resp = cerebro_lia(u.message.text, u.effective_user.first_name)
     
     # --- FILTRO INTELIGENTE DE ARCHIVOS ---
-    # Detectamos el bloque [[FILE]]...[[ENDFILE]]
     acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
     msgs = []
     
     if acciones:
         for ruta, contenido in acciones:
-            # 1. LIMPIEZA DE MARKDOWN (La corrección clave)
-            # Quitamos ```c, ```h, o ``` sueltos que Lía haya puesto por error
+            # 1. LIMPIEZA DE MARKDOWN
             contenido_limpio = re.sub(r"```[a-z]*", "", contenido).replace("```", "").strip()
-            
             # 2. Subida a GitHub
             res = subir_archivo_github(ruta.strip(), contenido_limpio)
             msgs.append(f"🛠️ {res}")
-            
-            # 3. Feedback visual en el chat (Ocultamos el código largo)
-            resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"\n*(Código aplicado en {ruta})*\n")
+            resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"\n*(Code applied to {ruta})*\n")
             
     await u.message.reply_text(resp)
     if msgs: await u.message.reply_text("\n".join(msgs), parse_mode="Markdown")
     if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
 
-# --- SERVER CORREGIDO ---
+# --- SERVER ---
 class H(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+    def do_HEAD(self): self.send_response(200); self.end_headers()
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -356,9 +349,8 @@ if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    # Registrar Comandos
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía v7.2 Lista.")), 
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v7.4 (No Lazy) Lista.")), 
         ("status", cmd_status), ("conectar", cmd_conectar),
         ("imagina", cmd_imagina), ("assets", cmd_assets),
         ("arbol", cmd_arbol), ("leer", cmd_leer),
@@ -370,6 +362,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v7.2 RESTORED & OPTIMIZED <<<")
+    print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
-
