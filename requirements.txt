@@ -5,3 +5,5 @@ APScheduler
 
 requests
 beautifulsoup4
+
+gTTS
