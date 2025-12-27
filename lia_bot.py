@@ -124,10 +124,8 @@ def subir_archivo_github(path_archivo, contenido, mensaje_commit="Creado por Lí
         # Verificar si existe
         try:
             contents = repo_obj.get_contents(path_archivo)
-            # Si existe, NO sobrescribimos por seguridad, devolvemos aviso.
             return "EXISTE" 
         except:
-            # Si da error, es que no existe. Lo creamos.
             pass 
 
         repo_obj.create_file(path_archivo, mensaje_commit, contenido)
@@ -185,20 +183,16 @@ def cerebro_lia(texto, usuario):
         return resp
     except Exception as e: return f"⚠️ Error mental: {e}"
 
-# --- GENERADOR DE VOZ (RESTAURADO) ---
+# --- GENERADOR DE VOZ ---
 async def generar_audio_tts(texto, chat_id, context):
     try:
-        # Generamos un nombre aleatorio
         archivo = f"voz_{random.randint(1000,9999)}.mp3"
-        # Usamos edge-tts
         communicate = edge_tts.Communicate(texto, "es-MX-DaliaNeural", rate="+10%")
         await communicate.save(archivo)
         
-        # Enviamos el audio
         with open(archivo, 'rb') as audio:
             await context.bot.send_voice(chat_id=chat_id, voice=audio)
         
-        # Limpiamos
         os.remove(archivo)
     except Exception as e:
         logger.error(f"TTS Error: {e}")
@@ -206,7 +200,6 @@ async def generar_audio_tts(texto, chat_id, context):
 # --- HANDLERS (COMANDOS) ---
 
 async def cmd_conectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cambia el repositorio activo en caliente."""
     nuevo_repo = " ".join(context.args).strip()
     if not nuevo_repo or "/" not in nuevo_repo:
         await update.message.reply_text("⚠️ Uso: `/conectar Usuario/Repo`")
@@ -291,7 +284,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lee archivos subidos (MANOS LECTORAS)."""
     doc = update.message.document
     if doc.file_size > 1024 * 1024:
         await update.message.reply_text("📁 Archivo muy grande.")
@@ -306,23 +298,24 @@ async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Solo leo texto plano/código.")
 
 async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Generamos respuesta de texto
     resp = cerebro_lia(update.message.text, update.effective_user.first_name)
-    
-    # 1. Enviamos texto
     await update.message.reply_text(resp)
     
-    # 2. (OPCIONAL) Enviamos audio aleatorio (20% probabilidad) para no saturar
     if random.random() < 0.2:
         await generar_audio_tts(resp[:200], update.effective_chat.id, context)
 
-# --- SERVIDOR WEB (PÁGINA FALSA RESTAURADA) ---
+# --- SERVIDOR WEB (CORREGIDO PARA MONITORING) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
         self.wfile.write(b"<h1>Lia Systems: ONLINE</h1><p>Status: Active</p>")
+    
+    def do_HEAD(self): # <--- ESTO ES LO NUEVO QUE ARREGLA EL ERROR 501
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -330,11 +323,9 @@ def run_health_server():
     logger.info("🩺 Servidor Web iniciado.")
     server.serve_forever()
 
-# --- PROACTIVIDAD (OJOS RESTAURADOS) ---
+# --- PROACTIVIDAD ---
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
-    
-    # Búsqueda de recursos en Itch.io (cada X horas)
     if random.random() < 0.3:
         try:
             url = "https://itch.io/game-assets/free/tag-pixel-art"
@@ -353,12 +344,10 @@ async def post_init(app):
     s.start()
 
 if __name__ == '__main__':
-    # Hilo del Servidor Web
     threading.Thread(target=run_health_server, daemon=True).start()
     
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    # Comandos
     app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("⚡ Lía Restaurada.")))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("conectar", cmd_conectar))
@@ -369,7 +358,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
     
-    # Mensajes y Archivos
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
