@@ -369,6 +369,66 @@ async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if random.random() < 0.2:
         await generar_audio_tts(resp[:200], update.effective_chat.id, context)
 
+async def cmd_arbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra la estructura de archivos del repo."""
+    if not repo_obj:
+        await update.message.reply_text("❌ Sin conexión al repo.")
+        return
+
+    await update.message.reply_chat_action("typing")
+    try:
+        contents = repo_obj.get_contents("")
+        arbol_str = "📂 **Estructura del Proyecto:**\n"
+        
+        count = 0
+        while contents:
+            file_content = contents.pop(0)
+            if file_content.type == "dir":
+                contents.extend(repo_obj.get_contents(file_content.path))
+                arbol_str += f"📁 /{file_content.path}\n"
+            else:
+                arbol_str += f"📄 {file_content.path}\n"
+            
+            count += 1
+            if count > 20: # Límite para no saturar el chat
+                arbol_str += "... (y más archivos)"
+                break
+                
+        await update.message.reply_text(arbol_str)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error leyendo estructura: {e}")
+
+async def cmd_leer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lee el contenido de un archivo específico del repo."""
+    path = " ".join(context.args).strip()
+    if not path:
+        await update.message.reply_text("⚠️ Uso: `/leer carpeta/archivo.py`")
+        return
+        
+    if not repo_obj:
+        await update.message.reply_text("❌ Sin conexión al repo.")
+        return
+
+    await update.message.reply_chat_action("typing")
+    try:
+        file_content = repo_obj.get_contents(path)
+        decoded_content = file_content.decoded_content.decode("utf-8")
+        
+        # Cortamos si es muy largo para Telegram (límite 4096 caracteres)
+        if len(decoded_content) > 3000:
+            msg = f"📄 **{path}** (Fragmento):\n\n```python\n{decoded_content[:3000]}...\n```"
+        else:
+            msg = f"📄 **{path}**:\n\n```python\n{decoded_content}\n```"
+            
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        
+        # Inyectamos esto en su memoria inmediata por si quieres pedir cambios sobre esto
+        global ultimo_codigo_leido
+        ultimo_codigo_leido = decoded_content
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ No pude leer `{path}`. Verifica el nombre.")
+
 # --- SERVIDOR WEB (MONITORING FIX) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -424,10 +484,12 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
     app.add_handler(CommandHandler("assets", cmd_assets))
-    
+    app.add_handler(CommandHandler("arbol", cmd_arbol))
+    app.add_handler(CommandHandler("leer", cmd_leer))
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
     print(">>> LÍA V4.0 OPERATIVA <<<")
     app.run_polling()
+
 
