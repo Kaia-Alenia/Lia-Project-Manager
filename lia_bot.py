@@ -29,10 +29,11 @@ MY_CHAT_ID = os.getenv("MY_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPO") 
+# Soportamos ambos nombres de variable por si acaso
+GITHUB_REPO = os.getenv("GITHUB_REPO") or os.getenv("REPO_NAME")
 
 # --- CLIENTES ---
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # Supabase
 supabase: Client = None
@@ -120,6 +121,7 @@ def obtener_metricas_github_real():
 
 # --- CEREBRO ---
 def cerebro_lia(texto, usuario):
+    if not client: return "⚠️ No tengo cerebro (Falta GROQ_API_KEY)"
     memoria = leer_memoria_completa()
     tareas = obtener_tareas_db()
     lista_tareas = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas)]) if tareas else "Al día."
@@ -158,13 +160,14 @@ async def generar_audio_tts(texto, chat_id, context):
         os.remove(archivo)
     except: pass
 
-# --- PROACTIVIDAD (RESTITUIDA) ---
+# --- PROACTIVIDAD ---
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     """Busca recursos automáticamente cada 4 horas."""
     if not MY_CHAT_ID: return
     try:
-        # Busca Pixel Art nuevo
-        r = requests.get("https://itch.io/game-assets/free/tag-pixel-art", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        # Busca Pixel Art nuevo con Header para evitar bloqueo
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        r = requests.get("https://itch.io/game-assets/free/tag-pixel-art", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
@@ -180,27 +183,62 @@ async def post_init(app):
     s.start()
 
 # --- COMANDOS ---
-async def cmd_imagina(u, c):
-    p = " ".join(c.args)
-    if not p: return await u.message.reply_text("Uso: /imagina texto")
-    await u.message.reply_chat_action("upload_photo")
-    url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(p)}?width=1024&height=1024&seed={random.randint(1,1e6)}&model=flux&nologo=true"
-    try: await u.message.reply_photo(url, caption=f"🎨 {p}")
-    except: await u.message.reply_text("Error generando imagen.")
 
-async def cmd_assets(u, c):
-    tag = " ".join(c.args).strip() or "pixel-art"
-    await u.message.reply_chat_action("typing")
+# 1. IMAGINA (CORREGIDO EL ERROR FLOAT)
+async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("🎨 Dime qué quieres que imagine. Ej: /imagina paisaje cyberpunk")
+        return
+
+    msg = await update.message.reply_text(f"🎨 Imaginando: '{prompt}'...")
+    
+    # CORRECCIÓN: Usamos entero (1000000) en vez de notación científica (1e6)
+    seed = random.randint(1, 1000000)
+    
+    image_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    
     try:
-        r = requests.get(f"https://itch.io/game-assets/free/tag-{tag}", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        response = requests.get(image_url, timeout=20)
+        if response.status_code == 200:
+            await update.message.reply_photo(photo=response.content)
+            await msg.delete()
+        else:
+            await msg.edit_text(f"⚠️ Error al pintar (Status: {response.status_code}).")
+    except Exception as e:
+        print(f"Error Imagina: {e}")
+        await msg.edit_text("⚠️ Lía se tropezó intentando dibujar. Intenta de nuevo.")
+
+# 2. ASSETS (CORREGIDO HEADERS)
+async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tag = " ".join(context.args).strip() or "pixel-art"
+    await update.message.reply_chat_action("typing")
+    
+    # CORRECCIÓN: Headers añadidos aquí
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    try:
+        r = requests.get(f"https://itch.io/game-assets/free/tag-{tag}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
+        
         if games:
+            # Tomamos hasta 3
             picks = random.sample(games, min(len(games), 3))
-            msg = "\n".join([f"- [{g.find('div', 'game_title').text.strip()}]({g.find('a', 'game_title').find('a')['href']})" for g in picks])
-            await u.message.reply_text(f"🔍 **{tag}:**\n{msg}", parse_mode="Markdown")
-        else: await u.message.reply_text("❌ Nada encontrado.")
-    except: await u.message.reply_text("❌ Error scraping.")
+            msg_lines = []
+            for g in picks:
+                title = g.find('div', 'game_title').text.strip()
+                link = g.find('a', 'game_title').find('a')['href']
+                msg_lines.append(f"- [{title}]({link})")
+            
+            await update.message.reply_text(f"🔍 **{tag}:**\n" + "\n".join(msg_lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text("❌ Nada encontrado.")
+    except Exception as e:
+        print(f"Error Assets: {e}")
+        await update.message.reply_text("❌ Error conectando a Itch.io.")
 
 async def cmd_arbol(u, c):
     if not repo_obj: return await u.message.reply_text("❌ Desconectado")
@@ -223,17 +261,42 @@ async def cmd_arbol(u, c):
         await u.message.reply_text(msg)
     except: await u.message.reply_text("Error leyendo repo.")
 
-async def cmd_leer(u, c):
-    path = " ".join(c.args).strip()
-    if not path or not repo_obj: return
-    await u.message.reply_chat_action("typing")
+# 3. LEER ARCHIVO (VERSION ROBUSTA CON DEBUG)
+async def cmd_leer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("📂 Uso: /leer <ruta_archivo>")
+        return
+
+    file_path = context.args[0]
+    
+    if not repo_obj:
+        await update.message.reply_text("⚠️ No estoy conectada a un repositorio.")
+        return
+
     try:
-        cont = repo_obj.get_contents(path).decoded_content.decode("utf-8")
+        # Intentamos obtener el contenido
+        contents = repo_obj.get_contents(file_path)
+        
+        # Decodificamos el archivo
+        code = contents.decoded_content.decode("utf-8")
+        
+        # Guardamos en memoria
         global ultimo_codigo_leido
-        ultimo_codigo_leido = cont
-        msg = f"📄 **{path}**:\n```python\n{cont[:3000]}\n```"
-        await u.message.reply_text(msg, parse_mode="Markdown")
-    except: await u.message.reply_text("Error leyendo archivo.")
+        ultimo_codigo_leido = code
+        
+        # Cortamos si es muy largo
+        if len(code) > 3000:
+            code = code[:3000] + "\n... (archivo truncado)"
+            
+        await update.message.reply_text(f"📄 **{file_path}**:\n```python\n{code}\n```", parse_mode="Markdown")
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error GitHub: {error_msg}")
+        if "404" in error_msg:
+            await update.message.reply_text("❌ Archivo no encontrado.")
+        else:
+            await update.message.reply_text(f"⚠️ Error leyendo archivo: {error_msg}")
 
 async def cmd_review(u, c):
     path = " ".join(c.args).strip()
@@ -248,14 +311,19 @@ async def cmd_review(u, c):
 
 async def cmd_run(u, c):
     code = u.message.text.replace("/run", "").strip()
-    if any(x in code for x in ["os.", "subprocess", "import os"]): return await u.message.reply_text("⛔ Prohibido.")
+    # Filtro de seguridad básico
+    if any(x in code for x in ["os.system", "subprocess", "rm -rf"]): 
+        return await u.message.reply_text("⛔ Prohibido.")
+    
     old = sys.stdout
     sys.stdout = new = io.StringIO()
     try:
         exec(code)
         await u.message.reply_text(f"🐍 Output:\n```\n{new.getvalue()}\n```", parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"💥 Error: {e}")
-    finally: sys.stdout = old
+    except Exception as e: 
+        await u.message.reply_text(f"💥 Error: {e}")
+    finally: 
+        sys.stdout = old
 
 async def cmd_codear(u, c):
     txt = u.message.text.replace("/codear ", "").strip()
@@ -289,13 +357,14 @@ async def recibir_archivo(u, c):
         await u.message.reply_text(cerebro_lia(f"Analiza:\n{txt}", "Alec"), parse_mode="Markdown")
 
 async def chat_texto(u, c):
-    resp = cerebro_lia(u.message.text, u.effective_user.first_name)
+    user_name = u.effective_user.first_name
+    resp = cerebro_lia(u.message.text, user_name)
     await u.message.reply_text(resp)
     if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
 
 # --- SERVER WEB (Health Check Robusto) ---
 class HealthHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args): pass # Silenciar logs del server para no ensuciar
+    def log_message(self, format, *args): pass 
     
     def do_GET(self):
         self.send_response(200)
@@ -308,23 +377,40 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server = HTTPServer(('0.0.0.0', port), HealthHandler) 
     server.serve_forever()
 
+# --- MAIN ---
 if __name__ == '__main__':
+    # 1. Iniciar Servidor Web (Hilo separado)
     threading.Thread(target=run_server, daemon=True).start()
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build() # <-- AQUÍ VOLVIÓ EL SCHEDULER
     
-    cmds = [("start", lambda u,c: u.message.reply_text("⚡ Lía Lista.")), ("status", cmd_status), ("conectar", cmd_conectar),
-            ("imagina", cmd_imagina), ("assets", cmd_assets), ("arbol", cmd_arbol), ("leer", cmd_leer), ("review", cmd_review),
-            ("run", cmd_run), ("codear", cmd_codear), ("tarea", cmd_tarea), ("pendientes", cmd_pendientes), ("hecho", cmd_hecho),
-            ("bug", lambda u,c: crear_issue_github(f"🐛 {' '.join(c.args)}", "Lía Bot", ["bug"])),
-            ("feature", lambda u,c: crear_issue_github(f"✨ {' '.join(c.args)}", "Lía Bot", ["enhancement"]))]
+    # 2. Configurar Bot
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    
+    # 3. Registrar Comandos
+    cmds = [
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía Lista.")), 
+        ("status", cmd_status), 
+        ("conectar", cmd_conectar),
+        ("imagina", cmd_imagina), # Corregido
+        ("assets", cmd_assets), # Corregido
+        ("arbol", cmd_arbol), 
+        ("leer", cmd_leer), # Corregido (Versión robusta)
+        ("review", cmd_review),
+        ("run", cmd_run), 
+        ("codear", cmd_codear), 
+        ("tarea", cmd_tarea), 
+        ("pendientes", cmd_pendientes), 
+        ("hecho", cmd_hecho),
+        ("bug", lambda u,c: crear_issue_github(f"🐛 {' '.join(c.args)}", "Lía Bot", ["bug"])),
+        ("feature", lambda u,c: crear_issue_github(f"✨ {' '.join(c.args)}", "Lía Bot", ["enhancement"]))
+    ]
             
     for c, f in cmds: app.add_handler(CommandHandler(c, f))
+    
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA RESTAURADA AL 100% <<<")
+    print(">>> LÍA RESTAURADA Y CORREGIDA AL 100% <<<")
     app.run_polling()
-
