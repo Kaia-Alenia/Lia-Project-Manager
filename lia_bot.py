@@ -17,7 +17,7 @@ from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import edge_tts
 from supabase import create_client, Client
-from github import Github
+from github import Github, Auth # Actualizado para Auth moderno
 
 # --- LOGS ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -41,12 +41,13 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e: logger.error(f"Error Supabase: {e}")
 
-# GitHub
+# GitHub (Auth Actualizado)
 gh_client = None
 repo_obj = None
 if GITHUB_TOKEN:
     try:
-        gh_client = Github(GITHUB_TOKEN)
+        auth = Auth.Token(GITHUB_TOKEN)
+        gh_client = Github(auth=auth)
         if GITHUB_REPO:
             try:
                 repo_obj = gh_client.get_repo(GITHUB_REPO)
@@ -144,7 +145,6 @@ def cerebro_lia(texto, usuario):
     lista_tareas = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas)]) if tareas else "Al día."
     repo_name = repo_obj.full_name if repo_obj else "Desconectado"
     
-    # SYSTEM PROMPT MEJORADO CON GBA_SPECS
     SYSTEM = f"""
     {memoria}
     [CONTEXTO] Repo: {repo_name} | Tareas: {lista_tareas}
@@ -164,7 +164,7 @@ def cerebro_lia(texto, usuario):
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto}],
-            temperature=0.2 # Precisión técnica alta
+            temperature=0.2 
         ).choices[0].message.content
         
         if "[[MEMORIZAR:" in resp:
@@ -214,7 +214,7 @@ async def post_init(app):
     s.start()
     logger.info("⏰ Cronograma OK")
 
-# --- COMANDOS (TODOS RESTAURADOS) ---
+# --- COMANDOS ---
 async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt: return await update.message.reply_text("🎨 Uso: `/imagina robot`")
@@ -295,7 +295,7 @@ async def cmd_hecho(u, c):
     if c.args: cerrar_tarea_db(int(c.args[0])); await u.message.reply_text("🔥")
 async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
-    await u.message.reply_text(f"📊 **Lía v7.1 (Full+Senior)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
+    await u.message.reply_text(f"📊 **Lía v7.2 (Restored)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
 # --- HANDLERS TEXTO ---
 async def recibir_archivo(u, c):
@@ -322,7 +322,7 @@ async def chat_texto(u, c):
     if msgs: await u.message.reply_text("\n".join(msgs), parse_mode="Markdown")
     if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
 
-# --- SERVER ---
+# --- SERVER CORREGIDO ---
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -332,14 +332,19 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
+def run_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), H)
+    server.serve_forever()
+
 # --- MAIN ---
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    # Registrar TODOS los comandos
+    # Registrar Comandos
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía v7.1 (Senior+Tools) Lista.")), 
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v7.2 Lista.")), 
         ("status", cmd_status), ("conectar", cmd_conectar),
         ("imagina", cmd_imagina), ("assets", cmd_assets),
         ("arbol", cmd_arbol), ("leer", cmd_leer),
@@ -351,6 +356,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v7.1 COMPLETE SYSTEM STARTED <<<")
+    print(">>> LÍA v7.2 RESTORED & OPTIMIZED <<<")
     app.run_polling()
-
