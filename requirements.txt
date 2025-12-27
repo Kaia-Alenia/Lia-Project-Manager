@@ -1,13 +1,8 @@
 python-telegram-bot
-
 groq
-APScheduler
-
 requests
 beautifulsoup4
-
 edge-tts
-
-gTTS
-
+apscheduler
 supabase
+PyGithub
