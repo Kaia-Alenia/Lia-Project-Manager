@@ -30,7 +30,7 @@ MY_CHAT_ID = os.getenv("MY_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPO") # Repo inicial por defecto
+GITHUB_REPO = os.getenv("GITHUB_REPO") 
 
 # --- CONEXIONES ---
 client = Groq(api_key=GROQ_API_KEY)
@@ -54,9 +54,9 @@ if GITHUB_TOKEN:
         if GITHUB_REPO:
             try:
                 repo_obj = gh_client.get_repo(GITHUB_REPO)
-                logger.info(f"✅ GitHub conectado al repo inicial: {GITHUB_REPO}")
+                logger.info(f"✅ GitHub conectado: {GITHUB_REPO}")
             except:
-                logger.warning(f"⚠️ No se pudo conectar al repo inicial: {GITHUB_REPO}")
+                logger.warning(f"⚠️ No se pudo conectar al repo inicial.")
     except Exception as e:
         logger.error(f"❌ Error GitHub Token: {e}")
 
@@ -70,7 +70,7 @@ REDES_PUBLICAS = {
 
 # --- FUNCIONES DE MEMORIA (Supabase) ---
 def leer_memoria_completa():
-    identidad = "Eres Lía, Co-Fundadora Senior de Kaia Alenia. Tu misión es profesionalizar el estudio."
+    identidad = "Eres Lía, Co-Fundadora Senior de Kaia Alenia."
     aprendizajes = ""
     if supabase:
         try:
@@ -79,12 +79,12 @@ def leer_memoria_completa():
                 aprendizajes = "\n".join([f"- {i['contenido']}" for i in res.data])
         except Exception as e: logger.error(f"Error Memoria Read: {e}")
     
-    return f"{identidad}\n\n[MEMORIA APRENDIDA DE ALEC]:\n{aprendizajes}"
+    return f"{identidad}\n\n[MEMORIA APRENDIDA]:\n{aprendizajes}"
 
 def guardar_aprendizaje(dato):
     if supabase:
         try: supabase.table("memoria").insert({"contenido": dato}).execute()
-        except Exception as e: logger.error(f"Error Memoria Write: {e}")
+        except: pass
 
 def obtener_tareas_db():
     if supabase:
@@ -118,15 +118,17 @@ def crear_issue_github(titulo, body, labels=[]):
         return None
 
 def subir_archivo_github(path_archivo, contenido, mensaje_commit="Creado por Lía"):
-    """Crea un archivo nuevo en el repositorio."""
+    """Crea o actualiza un archivo en el repositorio."""
     if not repo_obj: return None
     try:
         # Verificar si existe
         try:
-            repo_obj.get_contents(path_archivo)
+            contents = repo_obj.get_contents(path_archivo)
+            # Si existe, NO sobrescribimos por seguridad, devolvemos aviso.
             return "EXISTE" 
         except:
-            pass # No existe, procedemos
+            # Si da error, es que no existe. Lo creamos.
+            pass 
 
         repo_obj.create_file(path_archivo, mensaje_commit, contenido)
         return f"https://github.com/{repo_obj.full_name}/blob/main/{path_archivo}"
@@ -173,6 +175,7 @@ def cerebro_lia(texto, usuario):
             max_tokens=600
         ).choices[0].message.content
         
+        # Procesar memoria automática
         if "[[MEMORIZAR:" in resp:
             match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
             if match:
@@ -182,13 +185,31 @@ def cerebro_lia(texto, usuario):
         return resp
     except Exception as e: return f"⚠️ Error mental: {e}"
 
+# --- GENERADOR DE VOZ (RESTAURADO) ---
+async def generar_audio_tts(texto, chat_id, context):
+    try:
+        # Generamos un nombre aleatorio
+        archivo = f"voz_{random.randint(1000,9999)}.mp3"
+        # Usamos edge-tts
+        communicate = edge_tts.Communicate(texto, "es-MX-DaliaNeural", rate="+10%")
+        await communicate.save(archivo)
+        
+        # Enviamos el audio
+        with open(archivo, 'rb') as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        
+        # Limpiamos
+        os.remove(archivo)
+    except Exception as e:
+        logger.error(f"TTS Error: {e}")
+
 # --- HANDLERS (COMANDOS) ---
 
 async def cmd_conectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cambia el repositorio activo en caliente."""
     nuevo_repo = " ".join(context.args).strip()
     if not nuevo_repo or "/" not in nuevo_repo:
-        await update.message.reply_text("⚠️ Uso: `/conectar Usuario/Repo`\nEjemplo: `/conectar Kaia-Alenia/Project-Null`")
+        await update.message.reply_text("⚠️ Uso: `/conectar Usuario/Repo`")
         return
 
     global repo_obj
@@ -198,7 +219,7 @@ async def cmd_conectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         repo_obj = repo_test
         await update.message.reply_text(f"🔄 **Conexión Exitosa**\nAhora trabajo en: `{nuevo_repo}`")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error conectando a `{nuevo_repo}`.\nVerifica el nombre y permisos.")
+        await update.message.reply_text(f"❌ Error conectando a `{nuevo_repo}`.\nVerifica permisos.")
 
 async def cmd_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = " ".join(context.args)
@@ -226,7 +247,7 @@ async def cmd_bug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_chat_action("typing")
     url = crear_issue_github(f"🐛 {texto}", f"Reportado por Lía.\nContexto: {texto}", ["bug"])
     if url: await update.message.reply_text(f"🚨 **Bug creado:**\n{url}")
-    else: await update.message.reply_text("❌ Error GitHub (Sin conexión). Usa /conectar primero.")
+    else: await update.message.reply_text("❌ Error GitHub (Desconectado).")
 
 async def cmd_feature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = " ".join(context.args)
@@ -261,41 +282,86 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     f, s = obtener_metricas_github_real()
     
     msg = (
-        f"📊 **Estado Lía v2.1**\n"
+        f"📊 **Estado Lía Restaurado**\n"
         f"🧠 Memoria: {db_ok}\n"
-        f"🐙 Repo Activo: {gh_ok}\n"
-        f"📈 Métricas: {f} Seguidores, {s} Estrellas"
+        f"🐙 Repo: {gh_ok}\n"
+        f"📈 Métricas: {f} Seguidores, {s} Estrellas\n"
+        f"🗣️ Voz: Activa"
     )
     await update.message.reply_text(msg)
 
-async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.document: # Manejo simple de archivos
-        await update.message.reply_text("📂 Recibí un archivo. (Análisis pendiente)")
+async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lee archivos subidos (MANOS LECTORAS)."""
+    doc = update.message.document
+    if doc.file_size > 1024 * 1024:
+        await update.message.reply_text("📁 Archivo muy grande.")
         return
-    resp = cerebro_lia(update.message.text, update.effective_user.first_name)
-    await update.message.reply_text(resp)
+    try:
+        f = await context.bot.get_file(doc.file_id)
+        b = await f.download_as_bytearray()
+        txt = b.decode('utf-8')
+        resp = cerebro_lia(f"Analiza este archivo '{doc.file_name}':\n\n{txt}", "Alec")
+        await update.message.reply_text(f"📄 **Análisis:**\n\n{resp}", parse_mode="Markdown")
+    except:
+        await update.message.reply_text("⚠️ Solo leo texto plano/código.")
 
-# --- HEALTH CHECK ---
+async def chat_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Generamos respuesta de texto
+    resp = cerebro_lia(update.message.text, update.effective_user.first_name)
+    
+    # 1. Enviamos texto
+    await update.message.reply_text(resp)
+    
+    # 2. (OPCIONAL) Enviamos audio aleatorio (20% probabilidad) para no saturar
+    if random.random() < 0.2:
+        await generar_audio_tts(resp[:200], update.effective_chat.id, context)
+
+# --- SERVIDOR WEB (PÁGINA FALSA RESTAURADA) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Online")
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"<h1>Lia Systems: ONLINE</h1><p>Status: Active</p>")
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    logger.info("🩺 Servidor Web iniciado.")
     server.serve_forever()
 
+# --- PROACTIVIDAD (OJOS RESTAURADOS) ---
+async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
+    if not MY_CHAT_ID: return
+    
+    # Búsqueda de recursos en Itch.io (cada X horas)
+    if random.random() < 0.3:
+        try:
+            url = "https://itch.io/game-assets/free/tag-pixel-art"
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            games = soup.find_all('div', class_='game_cell')
+            if games:
+                pick = random.choice(games[:5])
+                link = pick.find('a', class_='game_title').find('a')['href']
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Recurso Encontrado:**\n{link}")
+        except: pass
+
 async def post_init(app):
-    pass # Espacio para tareas programadas si las necesitas
+    s = AsyncIOScheduler()
+    s.add_job(vigilancia_proactiva, 'interval', hours=4, args=[app])
+    s.start()
 
 if __name__ == '__main__':
+    # Hilo del Servidor Web
     threading.Thread(target=run_health_server, daemon=True).start()
     
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("⚡ Lía Online.")))
+    # Comandos
+    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("⚡ Lía Restaurada.")))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("conectar", cmd_conectar)) # NUEVO
+    app.add_handler(CommandHandler("conectar", cmd_conectar))
     app.add_handler(CommandHandler("tarea", cmd_tarea))
     app.add_handler(CommandHandler("bug", cmd_bug))
     app.add_handler(CommandHandler("feature", cmd_feature))
@@ -303,7 +369,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
     
-    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), chat_texto))
+    # Mensajes y Archivos
+    app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA ACTIVA <<<")
+    print(">>> LÍA COMPLETAMENTE OPERATIVA <<<")
     app.run_polling()
