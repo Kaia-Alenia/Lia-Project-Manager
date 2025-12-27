@@ -324,8 +324,13 @@ async def chat_texto(u, c):
 
 # --- SERVER ---
 class H(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
-def run_server(): HTTPServer(('0.0.0.0', int(os.environ.get("PORT",8080))), H).serve_forever()
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 # --- MAIN ---
 if __name__ == '__main__':
@@ -348,3 +353,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.1 COMPLETE SYSTEM STARTED <<<")
     app.run_polling()
+
