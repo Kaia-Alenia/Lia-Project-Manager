@@ -1,3 +1,4 @@
+[[FILE: lia_bot.py]]
 import os
 import sys
 import io
@@ -8,6 +9,7 @@ import logging
 import requests
 import re
 from datetime import datetime
+import pytz # NUEVO: Para zona horaria
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -173,26 +175,51 @@ async def generar_audio_tts(texto, chat_id, context):
         os.remove(archivo)
     except: pass
 
-# --- PROACTIVIDAD ---
+# --- PROACTIVIDAD Y RUTINAS (MODIFICADO) ---
+
+async def rutina_buenos_dias(context: ContextTypes.DEFAULT_TYPE):
+    """Manda mensaje a las 8 AM"""
+    if not MY_CHAT_ID: return
+    frases = [
+        "¡Buenos días, Jefe! ☀️ Sistemas listos. ¿Qué programamos hoy?",
+        "¡Arriba! ☕ El código de GBA no se escribe solo.",
+        "Nuevo día, nuevos bugs... digo, features. 🚀 Estoy lista."
+    ]
+    await context.bot.send_message(chat_id=MY_CHAT_ID, text=random.choice(frases))
+
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        # CORREGIDO: URL limpia sin markdown
+        # URL corregida (sin corchetes markdown)
         r = requests.get("[https://itch.io/game-assets/free/tag-pixel-art](https://itch.io/game-assets/free/tag-pixel-art)", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
             pick = random.choice(games[:5])
             title = pick.find('div', class_='game_title').text.strip()
-            link = pick.find('a', class_='game_title').find('a')['href']
+            # Búsqueda robusta del link
+            link_elem = pick.find('a', class_='game_title')
+            link = link_elem['href'] if link_elem else pick.find('a')['href']
+            
             await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Recurso Automático:**\n[{title}]({link})", parse_mode="Markdown")
-    except: pass
+    except Exception as e:
+        logger.error(f"Error vigilancia: {e}")
 
 async def post_init(app):
     s = AsyncIOScheduler()
-    s.add_job(vigilancia_proactiva, 'interval', hours=4, args=[app])
+    # Zona Horaria México
+    tz_mex = pytz.timezone('America/Mexico_City')
+    
+    # 1. Buenos días a las 8:00 AM
+    s.add_job(rutina_buenos_dias, 'cron', hour=8, minute=0, timezone=tz_mex, args=[app])
+    
+    # 2. Buscar recursos a las 13:00 y 19:00
+    s.add_job(vigilancia_proactiva, 'cron', hour=13, minute=0, timezone=tz_mex, args=[app])
+    s.add_job(vigilancia_proactiva, 'cron', hour=19, minute=0, timezone=tz_mex, args=[app])
+    
     s.start()
+    logger.info("⏰ Cronograma iniciado (Hora México)")
 
 # --- COMANDOS ---
 
@@ -203,7 +230,7 @@ async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text(f"🎨 Imaginando '{prompt}'...")
     seed = random.randint(1, 1000000)
-    # CORREGIDO: URL limpia sin markdown
+    # URL corregida
     image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt.replace(' ', '%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
         response = requests.get(image_url, timeout=20)
@@ -218,13 +245,20 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_chat_action("typing")
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        # CORREGIDO: URL limpia sin markdown
+        # URL corregida
         r = requests.get(f"[https://itch.io/game-assets/free/tag-](https://itch.io/game-assets/free/tag-){tag}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
             picks = random.sample(games, min(len(games), 3))
-            msg = "\n".join([f"- [{g.find('div', 'game_title').text.strip()}]({g.find('a', 'game_title').find('a')['href']})" for g in picks])
+            # Corrección extracción links
+            lista = []
+            for g in picks:
+                t = g.find('div', 'game_title').text.strip()
+                l_elem = g.find('a', 'game_title') # A veces es directo
+                l = l_elem['href'] if l_elem else g.find('a')['href']
+                lista.append(f"- [{t}]({l})")
+            msg = "\n".join(lista)
             await update.message.reply_text(f"🔍 **{tag}:**\n{msg}", parse_mode="Markdown")
         else: await update.message.reply_text("❌ Nada encontrado.")
     except: await update.message.reply_text("❌ Error Itch.io")
@@ -312,26 +346,23 @@ async def chat_texto(u, c):
     resp = cerebro_lia(u.message.text, user_name)
     
     # 2. Detectar si Lía quiere crear archivos ([[FILE: ...]] ... [[ENDFILE]])
-    # Usamos regex para encontrar bloques de código que ella quiera subir
     acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
     
     mensajes_accion = []
     
     if acciones:
         for ruta, contenido in acciones:
-            # Ejecutar la subida a GitHub
             resultado = subir_archivo_github(ruta.strip(), contenido.strip(), msg=f"Lía Auto-Dev: {ruta}")
             mensajes_accion.append(f"🛠️ {resultado}")
             
-            # Limpiar la respuesta para que no se vea el bloque feo en el chat
+            # Limpiar el bloque para que no salga en el chat
             bloque_completo = f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]"
-            # Reemplazamos el bloque por una nota bonita
             resp = resp.replace(bloque_completo, f"\n*(Archivo {ruta} subido al repo)*\n")
 
     # 3. Enviar respuesta normal
     await u.message.reply_text(resp)
     
-    # 4. Enviar confirmaciones de acciones (si hubo)
+    # 4. Enviar confirmaciones
     if mensajes_accion:
         await u.message.reply_text("\n".join(mensajes_accion), parse_mode="Markdown")
         
@@ -360,7 +391,7 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía v5.2 Lista.")), 
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v5.3 Lista (Groq+Cron).")), 
         ("status", cmd_status), ("conectar", cmd_conectar),
         ("imagina", cmd_imagina), ("assets", cmd_assets),
         ("arbol", cmd_arbol), ("leer", cmd_leer),
@@ -372,5 +403,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v5.2 CON MANOS AUTOMÁTICAS INICIADA <<<")
+    print(">>> LÍA v5.3 COMPLETA INICIADA <<<")
     app.run_polling()
