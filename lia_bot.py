@@ -55,7 +55,7 @@ if GITHUB_TOKEN and GITHUB_REPO:
     except Exception as e:
         logger.error(f"❌ Error GitHub: {e}")
 
-# --- LINKS PÚBLICOS (Para compartir, no para leer) ---
+# --- LINKS PÚBLICOS ---
 REDES_PUBLICAS = {
     "itch": "https://kaia-alenia.itch.io/",
     "instagram": "https://www.instagram.com/kaia.aleniaco/",
@@ -112,6 +112,24 @@ def crear_issue_github(titulo, body, labels=[]):
         logger.error(f"Error GH Issue: {e}")
         return None
 
+def subir_archivo_github(path_archivo, contenido, mensaje_commit="Creado por Lía"):
+    """Crea un archivo nuevo en el repositorio."""
+    if not repo_obj: return None
+    try:
+        # Primero verificamos si ya existe para no sobrescribir por accidente
+        try:
+            repo_obj.get_contents(path_archivo)
+            return "EXISTE" 
+        except:
+            pass # Si da error, es que no existe, procedemos
+
+        # Crear el archivo
+        repo_obj.create_file(path_archivo, mensaje_commit, contenido)
+        return f"https://github.com/{GITHUB_REPO}/blob/main/{path_archivo}"
+    except Exception as e:
+        logger.error(f"Error subiendo archivo: {e}")
+        return None
+
 def obtener_metricas_github_real():
     """Obtiene seguidores y estrellas reales usando PyGithub."""
     if not gh_client: return 0, 0
@@ -123,24 +141,6 @@ def obtener_metricas_github_real():
         stars = sum([repo.stargazers_count for repo in repos])
         return followers, stars
     except: return 0, 0
-        
- def subir_archivo_github(path_archivo, contenido, mensaje_commit="Creado por Lía"):
-    """Crea un archivo nuevo en el repositorio."""
-    if not repo_obj: return None
-    try:
-        # Primero verificamos si ya existe para no sobrescribir por accidente
-        try:
-            repo_obj.get_contents(path_archivo)
-            return "EXISTE" # Si no da error, es que existe
-        except:
-            pass # Si da error, es que no existe, procedemos
-
-        # Crear el archivo
-        repo_obj.create_file(path_archivo, mensaje_commit, contenido)
-        return f"https://github.com/{GITHUB_REPO}/blob/main/{path_archivo}"
-    except Exception as e:
-        logger.error(f"Error subiendo archivo: {e}")
-        return None       
 
 # --- CEREBRO LÍA ---
 def cerebro_lia(texto, usuario):
@@ -157,8 +157,8 @@ def cerebro_lia(texto, usuario):
     
     [REGLAS]
     1. Si Alec te da una orden de BUG o FEATURE, confirma y dile que use los comandos /bug o /feature.
-    2. Si Alec te da un dato personal/técnico importante (ej: "Usaremos Godot 4"), escribe al final: [[MEMORIZAR: dato]].
-    3. Si te piden redes sociales, usa estos links oficiales: {REDES_PUBLICAS}. NO inventes métricas.
+    2. Si Alec te da un dato personal/técnico importante, escribe al final: [[MEMORIZAR: dato]].
+    3. Si te piden redes sociales, usa estos links: {REDES_PUBLICAS}.
     """
     
     try:
@@ -178,17 +178,6 @@ def cerebro_lia(texto, usuario):
         
         return resp
     except Exception as e: return f"⚠️ Error mental: {e}"
-
-# --- GENERADOR DE VOZ ---
-async def generar_audio_tts(texto, chat_id, context):
-    try:
-        archivo = f"voz_{random.randint(100,999)}.mp3"
-        communicate = edge_tts.Communicate(texto, "es-MX-DaliaNeural", rate="+15%")
-        await communicate.save(archivo)
-        with open(archivo, 'rb') as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio)
-        os.remove(archivo)
-    except Exception as e: logger.error(f"TTS Error: {e}")
 
 # --- HANDLERS (COMANDOS) ---
 
@@ -239,6 +228,27 @@ async def cmd_feature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = crear_issue_github(f"✨ {texto}", f"Propuesta por Lía.\nDetalle: {texto}", ["enhancement"])
     if url: await update.message.reply_text(f"🚀 **Feature creada en GitHub:**\n{url}")
 
+async def cmd_codear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Crea un archivo nuevo en el repositorio."""
+    texto = update.message.text.replace("/codear ", "").strip()
+    if " " not in texto or len(texto) < 5:
+        await update.message.reply_text("⚠️ Uso: `/codear nombre.ext Contenido`")
+        return
+    
+    partes = texto.split(" ", 1)
+    nombre_archivo = partes[0]
+    contenido = partes[1]
+    
+    await update.message.reply_chat_action("typing")
+    url = subir_archivo_github(nombre_archivo, contenido)
+    
+    if url == "EXISTE":
+        await update.message.reply_text(f"⚠️ El archivo `{nombre_archivo}` ya existe. Seguridad activada.")
+    elif url:
+        await update.message.reply_text(f"🚀 **Código subido:**\n{url}")
+    else:
+        await update.message.reply_text("❌ Error subiendo el archivo.")
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reporte de estado de conexiones."""
     db_ok = "✅" if supabase else "❌"
@@ -249,8 +259,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 **Estado del Sistema Lía**\n"
         f"🧠 Memoria (Supabase): {db_ok}\n"
         f"🐙 GitHub Writer: {gh_ok} (Repo: {GITHUB_REPO})\n"
-        f"📈 Métricas Reales: {f} Seguidores, {s} Estrellas\n"
-        f"👁️ Redes: Itch, IG, X (Links cargados)"
+        f"📈 Métricas Reales: {f} Seguidores, {s} Estrellas"
     )
     await update.message.reply_text(msg)
 
@@ -286,77 +295,27 @@ def run_health_server():
     server.serve_forever()
 
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
-    """Revisa métricas y busca assets ocasionalmente."""
     if not MY_CHAT_ID: return
-    
-    # 1. Chequeo de Métricas
-    try:
-        f, s = obtener_metricas_github_real()
-        # Aquí podrías guardar el histórico en DB si quisieras
-        # Por simplicidad, Lía solo avisa si ve un hito (ej: > 10 estrellas)
-        # (Lógica simplificada para no spamear)
-    except: pass
-
-    # 2. Búsqueda de Oportunidades (Itch.io) - Baja frecuencia
-    if random.random() < 0.2: # 20% probabilidad
-        try:
-            url = "https://itch.io/game-assets/free/tag-pixel-art"
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            soup = BeautifulSoup(r.text, 'html.parser')
-            games = soup.find_all('div', class_='game_cell')
-            if games:
-                pick = random.choice(games[:8])
-                title = pick.find('div', class_='game_title').text.strip()
-                link = pick.find('a', class_='game_title').find('a')['href']
-                
-                msg = cerebro_lia(f"Encontré asset: {title}. ¿Sirve?", "Alec")
-                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Recurso:**\n{msg}\n{link}")
-        except: pass
+    # Lógica de vigilancia simple para mantenerla viva
+    pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"⚡ **Lía Manager vFinal**\nID: `{update.effective_chat.id}`\n\n"
-        f"Comandos:\n"
-        f"/tarea [texto] - Guardar pendiente\n"
-        f"/bug [texto] - Crear Issue en GitHub\n"
-        f"/feature [texto] - Crear Feature en GitHub\n"
-        f"/status - Ver conexiones"
+        f"⚡ **Lía Manager v2.0**\n"
+        f"/tarea [txt], /pendientes\n"
+        f"/bug [txt], /feature [txt]\n"
+        f"/codear [archivo] [código]\n"
+        f"/status"
     )
-async def cmd_codear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Uso: /codear nombre_archivo.ext contenido
-    Ejemplo: /codear npc.gd extends Node...
-    """
-    texto = update.message.text.replace("/codear ", "")
-    if " " not in texto:
-        await update.message.reply_text("⚠️ Uso: `/codear nombre.ext Contenido del código...`")
-        return
-    
-    # Separamos el nombre del archivo del contenido
-    partes = texto.split(" ", 1)
-    nombre_archivo = partes[0]
-    contenido = partes[1]
-    
-    await update.message.reply_chat_action("typing")
-    
-    url = subir_archivo_github(nombre_archivo, contenido)
-    
-    if url == "EXISTE":
-        await update.message.reply_text(f"⚠️ El archivo `{nombre_archivo}` ya existe. Por seguridad no lo sobrescribí.")
-    elif url:
-        await update.message.reply_text(f"🚀 **Código subido al Repo:**\n{url}")
-    else:
-        await update.message.reply_text("❌ Error subiendo el archivo.")
+
 async def post_init(app):
     s = AsyncIOScheduler()
     s.add_job(vigilancia_proactiva, 'interval', hours=4, args=[app])
     s.start()
 
 if __name__ == '__main__':
-    # Servidor Health Check en hilo separado (Para Render)
     threading.Thread(target=run_health_server, daemon=True).start()
     
-    # Bot
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -364,13 +323,12 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("tarea", cmd_tarea))
     app.add_handler(CommandHandler("bug", cmd_bug))
     app.add_handler(CommandHandler("feature", cmd_feature))
+    app.add_handler(CommandHandler("codear", cmd_codear)) # NUEVO
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
     
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
-    app.add_handler(CommandHandler("codear", cmd_codear))
+    
     print(">>> LÍA: SISTEMAS ACTIVOS <<<")
     app.run_polling()
-
-
