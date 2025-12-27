@@ -123,6 +123,24 @@ def obtener_metricas_github_real():
         stars = sum([repo.stargazers_count for repo in repos])
         return followers, stars
     except: return 0, 0
+        
+ def subir_archivo_github(path_archivo, contenido, mensaje_commit="Creado por Lía"):
+    """Crea un archivo nuevo en el repositorio."""
+    if not repo_obj: return None
+    try:
+        # Primero verificamos si ya existe para no sobrescribir por accidente
+        try:
+            repo_obj.get_contents(path_archivo)
+            return "EXISTE" # Si no da error, es que existe
+        except:
+            pass # Si da error, es que no existe, procedemos
+
+        # Crear el archivo
+        repo_obj.create_file(path_archivo, mensaje_commit, contenido)
+        return f"https://github.com/{GITHUB_REPO}/blob/main/{path_archivo}"
+    except Exception as e:
+        logger.error(f"Error subiendo archivo: {e}")
+        return None       
 
 # --- CEREBRO LÍA ---
 def cerebro_lia(texto, usuario):
@@ -304,7 +322,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/feature [texto] - Crear Feature en GitHub\n"
         f"/status - Ver conexiones"
     )
-
+async def cmd_codear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Uso: /codear nombre_archivo.ext contenido
+    Ejemplo: /codear npc.gd extends Node...
+    """
+    texto = update.message.text.replace("/codear ", "")
+    if " " not in texto:
+        await update.message.reply_text("⚠️ Uso: `/codear nombre.ext Contenido del código...`")
+        return
+    
+    # Separamos el nombre del archivo del contenido
+    partes = texto.split(" ", 1)
+    nombre_archivo = partes[0]
+    contenido = partes[1]
+    
+    await update.message.reply_chat_action("typing")
+    
+    url = subir_archivo_github(nombre_archivo, contenido)
+    
+    if url == "EXISTE":
+        await update.message.reply_text(f"⚠️ El archivo `{nombre_archivo}` ya existe. Por seguridad no lo sobrescribí.")
+    elif url:
+        await update.message.reply_text(f"🚀 **Código subido al Repo:**\n{url}")
+    else:
+        await update.message.reply_text("❌ Error subiendo el archivo.")
 async def post_init(app):
     s = AsyncIOScheduler()
     s.add_job(vigilancia_proactiva, 'interval', hours=4, args=[app])
@@ -330,3 +372,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA: SISTEMAS ACTIVOS <<<")
     app.run_polling()
+
