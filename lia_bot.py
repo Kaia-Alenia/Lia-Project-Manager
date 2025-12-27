@@ -79,33 +79,48 @@ def espiar_itchio():
 
 # --- MÓDULO 2: ARTISTA (IMÁGENES) ---
 async def comando_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Genera imágenes usando Pollinations AI (Gratis y rápido)"""
+    """Genera imágenes (Versión Robusta: Descarga primero, envía después)"""
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("🎨 **Uso:** `/imagina espada de fuego pixel art`")
+        await update.message.reply_text("🎨 **Uso:** `/imagina caballero oscuro pixel art`")
         return
 
-    await update.message.reply_text(f"🎨 Pintando: '{prompt}'... (Un momento)")
+    # Mensaje de espera
+    await update.message.reply_text(f"🎨 Pintando: '{prompt}'... (Esto puede tardar unos 20 seg)")
     
-    # Truco: Traducimos el prompt a inglés con Groq para mejor calidad de imagen
+    # 1. Traducir Prompt (Mejora la calidad)
     try:
         traduccion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": f"Translate this to English for an image generator prompt, keep it concise: {prompt}"}],
+            messages=[{"role": "user", "content": f"Translate to English for image prompt, concise: {prompt}"}],
             max_tokens=50
         ).choices[0].message.content
         prompt_final = traduccion
     except:
-        prompt_final = prompt # Si falla la traducción, usamos el original
+        prompt_final = prompt
 
-    # Usamos la API de Pollinations (No requiere key)
+    # 2. Generar URL
     seed = random.randint(0, 999999)
-    image_url = f"https://image.pollinations.ai/prompt/{prompt_final}?seed={seed}&width=1024&height=1024&nologo=true"
+    # width y height a 768 es más rápido y estable que 1024
+    image_url = f"https://image.pollinations.ai/prompt/{prompt_final}?seed={seed}&width=768&height=768&nologo=true"
     
+    # 3. Descargar la imagen nosotros mismos (Para evitar Timeouts de Telegram)
     try:
-        await update.message.reply_photo(photo=image_url, caption=f"🖼️ **Concept:** {prompt}\n🤖 **Modelo:** Pollinations AI")
+        # Ejecutamos la descarga en un hilo aparte para no congelar al bot
+        loop = asyncio.get_running_loop()
+        def descargar_imagen():
+            return requests.get(image_url, timeout=60) # Esperamos hasta 60 segundos
+        
+        response = await loop.run_in_executor(None, descargar_imagen)
+        
+        if response.status_code == 200:
+            # Enviamos los bytes directos
+            await update.message.reply_photo(photo=response.content, caption=f"🖼️ **Concept:** {prompt}\n🤖 **Modelo:** Pollinations AI")
+        else:
+            await update.message.reply_text(f"⚠️ La IA de dibujo falló (Error {response.status_code}). Intenta de nuevo.")
+            
     except Exception as e:
-        await update.message.reply_text(f"⚠️ La pintura se estropeó: {e}")
+        await update.message.reply_text(f"⚠️ Error al procesar la imagen: {e}")
 
 # --- MÓDULO 3: SECRETARIA (ARCHIVOS) ---
 async def comando_script(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,3 +255,4 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_con_lia))
     
     app.run_polling()
+
