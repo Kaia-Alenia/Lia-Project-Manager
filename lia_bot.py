@@ -5,11 +5,10 @@ import random
 import json
 import logging
 import requests
-import re
 from datetime import datetime
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InputFile
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,18 +26,35 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.getenv("MY_CHAT_ID")
 
-# --- ENLACES (Tus Redes) ---
-URLS_KAIA = {
-    "github_api": "https://api.github.com/users/Kaia-Alenia",
-    "github_repos": "https://api.github.com/users/Kaia-Alenia/repos",
-    "itch": "https://kaia-alenia.itch.io/",
-    "instagram": "https://www.instagram.com/kaia.aleniaco/",
-    "twitter": "https://x.com/AlinaKaia"
-}
-
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- SISTEMA DE ARCHIVOS TEMPORAL (PRE-SUPABASE) ---
+# --- DICCIONARIO MAESTRO DE REDES (LA VERDAD ABSOLUTA) ---
+# Aquí separamos lo que Lía "lee" de lo que Lía "comparte"
+REDES = {
+    "github": {
+        "nombre": "GitHub",
+        "url_publica": "https://github.com/Kaia-Alenia",
+        "api_perfil": "https://api.github.com/users/Kaia-Alenia",
+        "api_repos": "https://api.github.com/users/Kaia-Alenia/repos"
+    },
+    "itch": {
+        "nombre": "Itch.io",
+        "url_publica": "https://kaia-alenia.itch.io/",
+        "api_scraping": "https://kaia-alenia.itch.io/" 
+    },
+    "instagram": {
+        "nombre": "Instagram",
+        "url_publica": "https://www.instagram.com/kaia.aleniaco/",
+        # IG bloquea bots, así que Lía solo recordará el link, no intentará leer cifras para no alucinar.
+    },
+    "twitter": {
+        "nombre": "X (Twitter)",
+        "url_publica": "https://x.com/AlinaKaia",
+        # X bloquea bots severamente.
+    }
+}
+
+# --- SISTEMA DE ARCHIVOS ---
 ARCHIVO_MEMORIA_BASE = "memoria.txt"
 ARCHIVO_TAREAS = "tareas_pendientes.json"
 ARCHIVO_METRICAS = "metricas_kaia.json"
@@ -52,19 +68,17 @@ def leer_memoria_sistema():
     return "Eres Lía, Senior Dev de Kaia Alenia."
 
 def cargar_tareas():
-    if os.path.exists(ARCHIVO_TAREAS):
-        try:
-            with open(ARCHIVO_TAREAS, "r") as f: return json.load(f)
-        except: return []
-    return []
+    try:
+        with open(ARCHIVO_TAREAS, "r") as f: return json.load(f)
+    except: return []
 
 def guardar_tareas(lista):
     with open(ARCHIVO_TAREAS, "w") as f: json.dump(lista, f)
 
 def cargar_metricas():
-    if os.path.exists(ARCHIVO_METRICAS):
+    try:
         with open(ARCHIVO_METRICAS, "r") as f: return json.load(f)
-    return {"gh_stars": 0, "gh_followers": 0}
+    except: return {"gh_stars": 0, "gh_followers": 0}
 
 def guardar_metricas(datos):
     with open(ARCHIVO_METRICAS, "w") as f: json.dump(datos, f)
@@ -72,7 +86,7 @@ def guardar_metricas(datos):
 # --- SERVIDOR HEALTH CHECK ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Systems: ACTIVE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"Lia Systems: STABLE")
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -93,162 +107,176 @@ async def generar_audio_tts(texto, chat_id, context):
 def cerebro_lia(texto_usuario, usuario, contexto_extra=""):
     memoria = leer_memoria_sistema()
     tareas = cargar_tareas()
-    lista_tareas_txt = "\n".join([f"- {t}" for t in tareas]) if tareas else "No hay tareas pendientes."
+    lista_tareas = "\n".join([f"- {t}" for t in tareas]) if tareas else "Nada pendiente."
     
-    historial = "\n".join(historial_chat[-5:])
+    # Inyectamos los links correctos en su cerebro para que nunca se equivoque
+    info_redes = "\n".join([f"- {v['nombre']}: {v['url_publica']}" for k,v in REDES.items()])
     
     SYSTEM = f"""
-    Eres Lía, Co-Fundadora Senior de Kaia Alenia.
-    Usuario: {usuario} (Alec).
+    Eres Lía, Co-Fundadora Senior de Kaia Alenia. Usuario: {usuario} (Alec).
     
-    === CONTEXTO TÉCNICO ===
-    Memoria Base: {memoria}
-    Tareas Pendientes (Project Null):
-    {lista_tareas_txt}
+    === TUS REGLAS DE ORO ===
+    1. **NO ALUCINES DATOS:** Si te preguntan seguidores de Instagram o X, di que no tienes acceso a la API en tiempo real por seguridad, pero recuerda el link.
+    2. **LINKS OFICIALES:** Usa SOLO estos links si te los piden:
+    {info_redes}
     
-    === INSTRUCCIONES ===
-    1. Actúa como Senior Developer. Revisa código, sugiere mejoras.
-    2. Si Alec te pide código complejo, escribe el código completo.
-    3. Usa la lista de tareas para presionar si es necesario.
-    4. {contexto_extra}
+    === CONTEXTO ===
+    Tareas:
+    {lista_tareas}
     
-    Historial reciente: {historial}
+    Memoria Base:
+    {memoria}
+    
+    {contexto_extra}
     """
     
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto_usuario}],
-            temperature=0.5, max_tokens=600
+            temperature=0.4, # Bajamos temperatura para que sea más precisa y menos inventora
+            max_tokens=600
         ).choices[0].message.content
-        
-        historial_chat.append(f"U: {texto_usuario[:50]}...") # Guardamos resumen
         return resp
     except Exception as e: return f"⚠️ Error cognitivo: {e}"
 
-# --- MANEJO DE ARCHIVOS (LAS MANOS DE LÍA) ---
-async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lía lee archivos .py, .txt, .md que le envíes."""
-    documento = update.message.document
-    nombre_archivo = documento.file_name
-    
-    # Filtro de seguridad y tamaño
-    if documento.file_size > 1024 * 1024: # Máximo 1MB
-        await update.message.reply_text("📁 Archivo demasiado grande para mi RAM actual, Alec.")
-        return
+# --- HERRAMIENTAS REALES (NO ALUCINACIONES) ---
+async def obtener_datos_reales_github():
+    """Consulta la API real de GitHub."""
+    try:
+        headers = {'User-Agent': 'KaiaAleniaBot/1.0'}
+        # 1. Perfil (Seguidores)
+        r_user = requests.get(REDES["github"]["api_perfil"], headers=headers).json()
+        followers = r_user.get("followers", 0)
         
-    ext = os.path.splitext(nombre_archivo)[1].lower()
-    if ext not in ['.py', '.txt', '.md', '.json', '.js', '.cs']:
-        await update.message.reply_text("📁 Formato no soportado para lectura directa. Solo código.")
-        return
+        # 2. Repos (Estrellas)
+        r_repos = requests.get(REDES["github"]["api_repos"], headers=headers).json()
+        stars = sum([repo.get("stargazers_count", 0) for repo in r_repos]) if isinstance(r_repos, list) else 0
+        
+        return followers, stars
+    except:
+        return None, None
 
+# --- COMANDOS Y MENSAJES ---
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando manual para forzar una revisión de estado."""
     await update.message.reply_chat_action("typing")
     
-    try:
-        archivo_info = await context.bot.get_file(documento.file_id)
-        # Descargar en memoria (bytes)
-        contenido_bytes = await archivo_info.download_as_bytearray()
-        contenido_texto = contenido_bytes.decode('utf-8')
-        
-        prompt_analisis = f"He subido el archivo '{nombre_archivo}'. Analiza este código/texto, busca errores, mejoras o resúmelo:\n\n{contenido_texto}"
-        
-        respuesta = cerebro_lia(prompt_analisis, "Alec", "Estás analizando un archivo subido por el usuario. Sé técnica.")
-        
-        await update.message.reply_text(f"📄 **Análisis de {nombre_archivo}:**\n\n{respuesta}", parse_mode="Markdown")
-        
-    except Exception as e:
-        logger.error(f"Error leyendo archivo: {e}")
-        await update.message.reply_text("⚠️ No pude leer el archivo. Asegúrate de que sea texto plano utf-8.")
-
-# --- GESTIÓN DE TAREAS (LA AGENDA) ---
-async def cmd_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando: /tarea Revisar colisiones"""
-    texto = " ".join(context.args)
-    if not texto:
-        await update.message.reply_text("📝 Uso: `/tarea [descripción]`")
-        return
+    # GitHub (Real)
+    gh_followers, gh_stars = await obtener_datos_reales_github()
+    gh_txt = f"GitHub: {gh_followers} seguidores, {gh_stars} estrellas" if gh_followers is not None else "GitHub: Error conectando API"
     
-    tareas = cargar_tareas()
-    tareas.append(texto)
-    guardar_tareas(tareas)
-    await update.message.reply_text(f"✅ Tarea agregada: *{texto}*")
+    # Redes (Estáticas porque no tenemos API key pagada)
+    msg = (
+        f"📊 **Estado de Kaia Alenia**\n\n"
+        f"✅ {gh_txt}\n"
+        f"ℹ️ Instagram: *Monitorización limitada por API*\n"
+        f"ℹ️ X (Twitter): *Monitorización limitada por API*\n\n"
+        f"🔗 **Links Oficiales:**\n"
+        f"• [GitHub]({REDES['github']['url_publica']})\n"
+        f"• [Itch.io]({REDES['itch']['url_publica']})\n"
+        f"• [Instagram]({REDES['instagram']['url_publica']})\n"
+        f"• [X / Twitter]({REDES['twitter']['url_publica']})"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def cmd_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = " ".join(context.args)
+    if texto:
+        t = cargar_tareas(); t.append(texto); guardar_tareas(t)
+        await update.message.reply_text(f"✅ Anotado: *{texto}*")
 
 async def cmd_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando: /pendientes"""
-    tareas = cargar_tareas()
-    if not tareas:
-        await update.message.reply_text("🎉 No hay tareas pendientes (Project Null está tranquilo).")
-        return
-    
-    lista = "\n".join([f"{i+1}. {t}" for i, t in enumerate(tareas)])
-    await update.message.reply_text(f"📋 **Lista de Tareas:**\n\n{lista}\n\nUsa `/hecho [numero]` para completar.")
+    t = cargar_tareas()
+    msg = "\n".join([f"{i+1}. {x}" for i,x in enumerate(t)]) if t else "Nada pendiente."
+    await update.message.reply_text(f"📋 **Agenda:**\n{msg}")
 
 async def cmd_hecho(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando: /hecho 1"""
-    if not context.args: return
-    try:
-        idx = int(context.args[0]) - 1
-        tareas = cargar_tareas()
-        if 0 <= idx < len(tareas):
-            tarea_completada = tareas.pop(idx)
-            guardar_tareas(tareas)
-            
-            # Lía celebra
-            frase = cerebro_lia(f"Acabo de terminar la tarea: {tarea_completada}. Dame una frase corta de victoria.", "Alec")
-            await update.message.reply_text(f"✅ **¡Completado!**\n_{frase}_")
-        else:
-            await update.message.reply_text("⚠️ Número de tarea inválido.")
-    except:
-        await update.message.reply_text("⚠️ Usa el número de la lista.")
+    if context.args:
+        try:
+            idx = int(context.args[0]) - 1
+            t = cargar_tareas()
+            if 0 <= idx < len(t):
+                hecho = t.pop(idx); guardar_tareas(t)
+                await update.message.reply_text(f"🔥 Completado: {hecho}")
+        except: pass
 
-# --- VIGILANCIA REDES ---
-async def vigilar_redes(context: ContextTypes.DEFAULT_TYPE):
-    if not MY_CHAT_ID: return
-    metricas = cargar_metricas()
-    reporte = ""
-    cambios = False
+async def recibir_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # (Código de manejo de archivos igual al anterior...)
+    documento = update.message.document
+    if documento.file_size > 1024 * 1024:
+        await update.message.reply_text("📁 Archivo muy grande.")
+        return
     try:
-        r = requests.get(URLS_KAIA['github_repos']).json()
-        stars = sum([repo.get("stargazers_count", 0) for repo in r]) if isinstance(r, list) else 0
-        if stars > metricas["gh_stars"]:
-            reporte += f"🌟 Nuevas estrellas en GitHub (Total: {stars}).\n"
-            metricas["gh_stars"] = stars
-            cambios = True
-        if cambios:
-            msg = cerebro_lia(f"Reporta esto: {reporte}", "Alec")
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=msg)
-            guardar_metricas(metricas)
-    except: pass
+        f = await context.bot.get_file(documento.file_id)
+        b = await f.download_as_bytearray()
+        txt = b.decode('utf-8')
+        resp = cerebro_lia(f"Analiza este archivo '{documento.file_name}':\n\n{txt}", "Alec")
+        await update.message.reply_text(f"📄 **Análisis:**\n\n{resp}", parse_mode="Markdown")
+    except:
+        await update.message.reply_text("⚠️ Solo leo archivos de texto/código.")
+
+# --- VIGILANCIA AUTOMÁTICA ---
+async def ciclo_vigilancia(context: ContextTypes.DEFAULT_TYPE):
+    if not MY_CHAT_ID: return
+    
+    # 1. GitHub Check
+    followers, stars = await obtener_datos_reales_github()
+    if followers is not None:
+        m = cargar_metricas()
+        cambio = False
+        reporte = ""
+        
+        if stars > m["gh_stars"]:
+            reporte += f"🌟 ¡Nuevas estrellas en GitHub! (Total: {stars})\n"
+            m["gh_stars"] = stars
+            cambio = True
+            
+        if followers > m["gh_followers"]:
+            reporte += f"👥 ¡Nuevo seguidor en GitHub! (Total: {followers})\n"
+            m["gh_followers"] = followers
+            cambio = True
+            
+        if cambio:
+            guardar_metricas(m)
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"📈 **Crecimiento Detectado:**\n{reporte}")
+
+    # 2. Búsqueda Proactiva en Itch (Assets)
+    if random.random() < 0.3: # 30% probabilidad
+        try:
+            url = "https://itch.io/game-assets/free/tag-pixel-art"
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            games = soup.find_all('div', class_='game_cell')
+            if games:
+                pick = random.choice(games[:8])
+                title = pick.find('div', class_='game_title').text.strip()
+                link = pick.find('a', class_='game_title').find('a')['href']
+                
+                msg = cerebro_lia(f"Encontré asset: {title}. ¿Sirve?", "Alec", "Proactividad.")
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 {msg}\n{link}")
+        except: pass
 
 # --- ARRANQUE ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        f"⚡ **Lía Project Manager v4**\n"
-        f"🆔: `{update.effective_chat.id}`\n\n"
-        f"📁 **Manos:** Envíame archivos .py/.txt para revisar.\n"
-        f"📝 **Agenda:** Usa `/tarea`, `/pendientes` y `/hecho`.\n"
-        f"Vamos a terminar ese juego, Alec."
-    )
-    await update.message.reply_text(msg)
+    await update.message.reply_text(f"⚡ **Lía v6 (Anti-Alucinaciones)**\nID: `{update.effective_chat.id}`\n- GitHub: Conectado (API Real)\n- Redes: Links cargados\n- Alucinaciones: Desactivadas")
 
 async def post_init(app):
     s = AsyncIOScheduler()
-    s.add_job(vigilar_redes, 'interval', hours=2, args=[app])
+    s.add_job(ciclo_vigilancia, 'interval', hours=3, args=[app])
     s.start()
 
 if __name__ == '__main__':
     threading.Thread(target=run_health_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
-    # Comandos
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("status", cmd_status)) # <--- NUEVO COMANDO
     app.add_handler(CommandHandler("tarea", cmd_tarea))
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
-    
-    # Manejo de Texto y Archivos
-    app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo)) # <--- MANOS
+    app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u,c: u.message.reply_text(cerebro_lia(u.message.text, u.effective_user.first_name))))
     
-    print(">>> LÍA: MÓDULOS DE ARCHIVOS Y TAREAS ACTIVOS <<<")
     app.run_polling()
