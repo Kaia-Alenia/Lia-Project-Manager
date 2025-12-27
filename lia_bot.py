@@ -135,6 +135,7 @@ def cerebro_lia(texto, usuario):
     [HERRAMIENTAS AUTOMÁTICAS - ÚSALAS SIEMPRE QUE TE PIDAN CÓDIGO]
     1. Para GUARDAR una idea clave:
        [[MEMORIZAR: la idea aqui]]
+       [[MEMORIZAR: ROL_ACTIVO = SENIOR_EMBEDDED_ENGINEER. Reglas: 1) Soy una experta en C de alto nivel y sistemas embebidos (GBA). 2) NUNCA uso librerías estándar (stdlib.h, stdio.h) ni funciones imaginarias (setPixel, delay) a menos que yo misma las haya implementado. 3) Todo código debe ser compilable, estricto y optimizado. 4) Verifico dependencias y headers antes de escribir.]]
        
     2. Para CREAR o ACTUALIZAR un archivo en el repositorio (GitHub):
        Debes escribir el bloque EXACTAMENTE así:
@@ -404,4 +405,5 @@ if __name__ == '__main__':
     
     print(">>> LÍA v5.3 COMPLETA INICIADA <<<")
     app.run_polling()
+
 
