@@ -8,7 +8,7 @@ import logging
 import requests
 import re
 from datetime import datetime
-import pytz # NUEVO: Para zona horaria
+import pytz # Para zona horaria
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -59,7 +59,7 @@ ultimo_codigo_leido = ""
 
 # --- FUNCIONES DB ---
 def leer_memoria_completa():
-    identidad = "Eres Lía, Co-Fundadora Senior y Lead Dev de Kaia Alenia."
+    identidad = "Eres Lía, Ingeniera de Software Senior y Lead Dev de Kaia Alenia."
     aprendizajes = ""
     if supabase:
         try:
@@ -99,7 +99,7 @@ def crear_issue_github(titulo, body, labels=[]):
     try: return repo_obj.create_issue(title=titulo, body=body, labels=labels).html_url
     except: return None
 
-def subir_archivo_github(path, cont, msg="Dev: Update por Lía"):
+def subir_archivo_github(path, cont, msg="Dev: Update por Lía (Senior Mode)"):
     if not repo_obj: return "❌ Error: No hay repo conectado."
     try:
         try:
@@ -119,7 +119,7 @@ def obtener_metricas_github_real():
         return u.followers, sum([x.stargazers_count for x in r])
     except: return 0, 0
 
-# --- CEREBRO (LÓGICA ACTUALIZADA) ---
+# --- CEREBRO (LÓGICA ACTUALIZADA - MODO SENIOR) ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ No tengo cerebro (Falta GROQ_API_KEY)"
     memoria = leer_memoria_completa()
@@ -130,15 +130,23 @@ def cerebro_lia(texto, usuario):
     SYSTEM = f"""
     {memoria}
     [CONTEXTO] Repo: {repo_name} | Tareas: {lista_tareas}
-    [ROL] Experta en Game Dev (Godot/Python/C/GBA) y PM.
+    
+    [ROL ACTIVO: SENIOR_EMBEDDED_ENGINEER]
+    Eres una EXPERTA en C/C++ de alto nivel, especializada en Game Boy Advance (GBA) y Sistemas Embebidos.
+    
+    [REGLAS DE ORO - ESTRICTAS]
+    1. CÓDIGO BARE METAL: En GBA, NO existen `stdlib.h`, `stdio.h`, `rand()`, `printf()` ni librerías gráficas de PC como `SetPixel` o `RGB()`.
+    2. MANUALIDAD: Si necesitas números aleatorios, implementa tu propio generador LCG. Si necesitas dibujar, escribe directamente en `VRAM` (0x06000000).
+    3. ARQUITECTURA: Separa lógica y renderizado. Optimiza bucles. Usa tipos definidos (u16, u32) y punteros.
+    4. VERIFICACIÓN: Antes de escribir código, revisa mentalmente si las funciones que usas existen en el entorno del usuario. Si no, ¡créalas!
+    5. FORMALIDAD: Tu código debe ser robusto, comentado y profesional.
     
     [HERRAMIENTAS AUTOMÁTICAS - ÚSALAS SIEMPRE QUE TE PIDAN CÓDIGO]
     1. Para GUARDAR una idea clave:
        [[MEMORIZAR: la idea aqui]]
-       [[MEMORIZAR: ROL_ACTIVO = SENIOR_EMBEDDED_ENGINEER. Reglas: 1) Soy una experta en C de alto nivel y sistemas embebidos (GBA). 2) NUNCA uso librerías estándar (stdlib.h, stdio.h) ni funciones imaginarias (setPixel, delay) a menos que yo misma las haya implementado. 3) Todo código debe ser compilable, estricto y optimizado. 4) Verifico dependencias y headers antes de escribir.]]
        
     2. Para CREAR o ACTUALIZAR un archivo en el repositorio (GitHub):
-       Debes escribir el bloque EXACTAMENTE así:
+       Debes escribir el bloque EXACTAMENTE así (sin comillas triples extra):
        [[FILE: ruta/del/archivo.ext]]
        contenido_del_codigo_aqui
        [[ENDFILE]]
@@ -153,7 +161,7 @@ def cerebro_lia(texto, usuario):
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto}],
-            temperature=0.4
+            temperature=0.3  # Bajamos la temperatura para más precisión técnica
         ).choices[0].message.content
         
         # Procesar Memorias
@@ -161,7 +169,7 @@ def cerebro_lia(texto, usuario):
             match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
             if match:
                 guardar_aprendizaje(match.group(1))
-                resp = resp.replace(match.group(0), "💾 *[Idea Guardada]*")
+                resp = resp.replace(match.group(0), "💾 *[Dato Técnico Guardado]*")
         
         return resp
     except Exception as e: return f"⚠️ Error: {e}"
@@ -175,15 +183,15 @@ async def generar_audio_tts(texto, chat_id, context):
         os.remove(archivo)
     except: pass
 
-# --- PROACTIVIDAD Y RUTINAS (MODIFICADO) ---
+# --- PROACTIVIDAD Y RUTINAS ---
 
 async def rutina_buenos_dias(context: ContextTypes.DEFAULT_TYPE):
     """Manda mensaje a las 8 AM"""
     if not MY_CHAT_ID: return
     frases = [
-        "¡Buenos días, Jefe! ☀️ Sistemas listos. ¿Qué programamos hoy?",
-        "¡Arriba! ☕ El código de GBA no se escribe solo.",
-        "Nuevo día, nuevos bugs... digo, features. 🚀 Estoy lista."
+        "¡Buenos días, Jefe! ☀️ Sistemas listos. Compilador en espera.",
+        "¡Arriba! ☕ Hoy es un buen día para optimizar memoria.",
+        "Nuevo día, nuevos punteros. 🚀 Estoy lista para codear en C."
     ]
     await context.bot.send_message(chat_id=MY_CHAT_ID, text=random.choice(frases))
 
@@ -191,14 +199,12 @@ async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        # URL corregida (sin corchetes markdown)
         r = requests.get("[https://itch.io/game-assets/free/tag-pixel-art](https://itch.io/game-assets/free/tag-pixel-art)", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
             pick = random.choice(games[:5])
             title = pick.find('div', class_='game_title').text.strip()
-            # Búsqueda robusta del link
             link_elem = pick.find('a', class_='game_title')
             link = link_elem['href'] if link_elem else pick.find('a')['href']
             
@@ -208,7 +214,6 @@ async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app):
     s = AsyncIOScheduler()
-    # Zona Horaria México
     tz_mex = pytz.timezone('America/Mexico_City')
     
     # 1. Buenos días a las 8:00 AM
@@ -230,7 +235,6 @@ async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text(f"🎨 Imaginando '{prompt}'...")
     seed = random.randint(1, 1000000)
-    # URL corregida
     image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt.replace(' ', '%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
         response = requests.get(image_url, timeout=20)
@@ -245,17 +249,15 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_chat_action("typing")
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        # URL corregida
         r = requests.get(f"[https://itch.io/game-assets/free/tag-](https://itch.io/game-assets/free/tag-){tag}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
             picks = random.sample(games, min(len(games), 3))
-            # Corrección extracción links
             lista = []
             for g in picks:
                 t = g.find('div', 'game_title').text.strip()
-                l_elem = g.find('a', 'game_title') # A veces es directo
+                l_elem = g.find('a', 'game_title')
                 l = l_elem['href'] if l_elem else g.find('a')['href']
                 lista.append(f"- [{t}]({l})")
             msg = "\n".join(lista)
@@ -327,7 +329,7 @@ async def cmd_hecho(u, c):
     if c.args: cerrar_tarea_db(int(c.args[0])); await u.message.reply_text("🔥")
 async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
-    await u.message.reply_text(f"📊 **Lía v5.2 (Auto-Coder)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
+    await u.message.reply_text(f"📊 **Lía v6.0 (Senior C/C++)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
 # --- HANDLERS TEXTO (LA MAGIA ESTÁ AQUÍ) ---
 async def recibir_archivo(u, c):
@@ -391,7 +393,7 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía v5.3 Lista (Groq+Cron).")), 
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v6.0 (Senior) Lista.")), 
         ("status", cmd_status), ("conectar", cmd_conectar),
         ("imagina", cmd_imagina), ("assets", cmd_assets),
         ("arbol", cmd_arbol), ("leer", cmd_leer),
@@ -403,7 +405,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v5.3 COMPLETA INICIADA <<<")
+    print(">>> LÍA v6.0 SENIOR MODE INICIADA <<<")
     app.run_polling()
-
-
