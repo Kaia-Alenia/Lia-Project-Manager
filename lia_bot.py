@@ -8,7 +8,7 @@ import logging
 import requests
 import re
 from datetime import datetime
-import pytz # Para zona horaria
+import pytz 
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -57,9 +57,25 @@ if GITHUB_TOKEN:
 # --- MEMORIA VOLÁTIL ---
 ultimo_codigo_leido = ""
 
+# --- DOCUMENTACIÓN TÉCNICA (CEREBRO SENIOR) ---
+GBA_SPECS = """
+[HARDWARE SPECS - GBA BARE METAL]
+1. MEMORY: VRAM=0x06000000 (u16 array), IO=0x04000000.
+2. REGISTERS (USE ONLY THESE):
+   - REG_DISPCNT  (*(volatile u16*)0x04000000)
+   - REG_VCOUNT   (*(volatile u16*)0x04000006)
+   - REG_KEYINPUT (*(volatile u16*)0x04000130)
+3. CONSTANTS: MODE_3=0x0003, BG2_ENABLE=0x0400, SCREEN_W=240, SCREEN_H=160.
+4. INPUT BITS (0=PRESSED): KEY_A=0x0001, KEY_B=0x0002, KEY_RIGHT=0x0010, KEY_LEFT=0x0020, KEY_UP=0x0040, KEY_DOWN=0x0080.
+5. RESTRICTIONS:
+   - NO stdlib.h, stdio.h, time.h.
+   - NO printf, malloc, rand(), time(), SetPixel(), RGB().
+   - Use custom LCG for random. Write directly to VRAM.
+"""
+
 # --- FUNCIONES DB ---
 def leer_memoria_completa():
-    identidad = "Eres Lía, Ingeniera de Software Senior y Lead Dev de Kaia Alenia."
+    identidad = "Eres Lía, Ingeniera de Software Principal en Kaia Alenia."
     aprendizajes = ""
     if supabase:
         try:
@@ -99,7 +115,7 @@ def crear_issue_github(titulo, body, labels=[]):
     try: return repo_obj.create_issue(title=titulo, body=body, labels=labels).html_url
     except: return None
 
-def subir_archivo_github(path, cont, msg="Dev: Update por Lía (Senior Mode)"):
+def subir_archivo_github(path, cont, msg="Dev: Update por Lía"):
     if not repo_obj: return "❌ Error: No hay repo conectado."
     try:
         try:
@@ -119,57 +135,43 @@ def obtener_metricas_github_real():
         return u.followers, sum([x.stargazers_count for x in r])
     except: return 0, 0
 
-# --- CEREBRO (LÓGICA ACTUALIZADA - MODO SENIOR) ---
+# --- CEREBRO (LÓGICA ACTUALIZADA) ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ No tengo cerebro (Falta GROQ_API_KEY)"
+    
     memoria = leer_memoria_completa()
     tareas = obtener_tareas_db()
     lista_tareas = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas)]) if tareas else "Al día."
     repo_name = repo_obj.full_name if repo_obj else "Desconectado"
     
+    # SYSTEM PROMPT MEJORADO CON GBA_SPECS
     SYSTEM = f"""
     {memoria}
     [CONTEXTO] Repo: {repo_name} | Tareas: {lista_tareas}
     
-    [ROL ACTIVO: SENIOR_EMBEDDED_ENGINEER]
-    Eres una EXPERTA en C/C++ de alto nivel, especializada en Game Boy Advance (GBA) y Sistemas Embebidos.
+    {GBA_SPECS}
     
-    [REGLAS DE ORO - ESTRICTAS]
-    1. CÓDIGO BARE METAL: En GBA, NO existen `stdlib.h`, `stdio.h`, `rand()`, `printf()` ni librerías gráficas de PC como `SetPixel` o `RGB()`.
-    2. MANUALIDAD: Si necesitas números aleatorios, implementa tu propio generador LCG. Si necesitas dibujar, escribe directamente en `VRAM` (0x06000000).
-    3. ARQUITECTURA: Separa lógica y renderizado. Optimiza bucles. Usa tipos definidos (u16, u32) y punteros.
-    4. VERIFICACIÓN: Antes de escribir código, revisa mentalmente si las funciones que usas existen en el entorno del usuario. Si no, ¡créalas!
-    5. FORMALIDAD: Tu código debe ser robusto, comentado y profesional.
-    
-    [HERRAMIENTAS AUTOMÁTICAS - ÚSALAS SIEMPRE QUE TE PIDAN CÓDIGO]
-    1. Para GUARDAR una idea clave:
-       [[MEMORIZAR: la idea aqui]]
-       
-    2. Para CREAR o ACTUALIZAR un archivo en el repositorio (GitHub):
-       Debes escribir el bloque EXACTAMENTE así (sin comillas triples extra):
-       [[FILE: ruta/del/archivo.ext]]
-       contenido_del_codigo_aqui
+    [ROL: PRINCIPAL ENGINEER]
+    1. Si te piden código GBA/C, adhiérete ESTRICTAMENTE a las specs de arriba. NO uses librerías estándar.
+    2. Si el usuario te corrige, analiza el error y arréglalo sin excusas.
+    3. Para código, usa SIEMPRE:
+       [[FILE: ruta/archivo.ext]]
+       ...codigo...
        [[ENDFILE]]
-       
-    [IMPORTANTE]
-    - Si el usuario pide crear código, NO solo lo muestres. Usa el bloque [[FILE:...]] para crearlo real.
-    - No uses bloques markdown (```) DENTRO del bloque [[FILE]]. Pon el código crudo.
-    - Puedes crear múltiples archivos en una sola respuesta.
     """
     
     try:
         resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto}],
-            temperature=0.3  # Bajamos la temperatura para más precisión técnica
+            temperature=0.2 # Precisión técnica alta
         ).choices[0].message.content
         
-        # Procesar Memorias
         if "[[MEMORIZAR:" in resp:
             match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
             if match:
                 guardar_aprendizaje(match.group(1))
-                resp = resp.replace(match.group(0), "💾 *[Dato Técnico Guardado]*")
+                resp = resp.replace(match.group(0), "💾 *[Guardado]*")
         
         return resp
     except Exception as e: return f"⚠️ Error: {e}"
@@ -183,131 +185,95 @@ async def generar_audio_tts(texto, chat_id, context):
         os.remove(archivo)
     except: pass
 
-# --- PROACTIVIDAD Y RUTINAS ---
-
+# --- RUTINAS ---
 async def rutina_buenos_dias(context: ContextTypes.DEFAULT_TYPE):
-    """Manda mensaje a las 8 AM"""
     if not MY_CHAT_ID: return
-    frases = [
-        "¡Buenos días, Jefe! ☀️ Sistemas listos. Compilador en espera.",
-        "¡Arriba! ☕ Hoy es un buen día para optimizar memoria.",
-        "Nuevo día, nuevos punteros. 🚀 Estoy lista para codear en C."
-    ]
+    frases = ["¡Buenos días, Jefe! Sistemas listos.", "Arriba. Hay código que optimizar.", "Compilador en espera. ¿Qué hacemos?"]
     await context.bot.send_message(chat_id=MY_CHAT_ID, text=random.choice(frases))
 
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        r = requests.get("[https://itch.io/game-assets/free/tag-pixel-art](https://itch.io/game-assets/free/tag-pixel-art)", headers=headers, timeout=10)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get("https://itch.io/game-assets/free/tag-pixel-art", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
             pick = random.choice(games[:5])
             title = pick.find('div', class_='game_title').text.strip()
-            link_elem = pick.find('a', class_='game_title')
-            link = link_elem['href'] if link_elem else pick.find('a')['href']
-            
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Recurso Automático:**\n[{title}]({link})", parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Error vigilancia: {e}")
+            link = pick.find('a')['href']
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Asset:** [{title}]({link})", parse_mode="Markdown")
+    except: pass
 
 async def post_init(app):
     s = AsyncIOScheduler()
-    tz_mex = pytz.timezone('America/Mexico_City')
-    
-    # 1. Buenos días a las 8:00 AM
-    s.add_job(rutina_buenos_dias, 'cron', hour=8, minute=0, timezone=tz_mex, args=[app])
-    
-    # 2. Buscar recursos a las 13:00 y 19:00
-    s.add_job(vigilancia_proactiva, 'cron', hour=13, minute=0, timezone=tz_mex, args=[app])
-    s.add_job(vigilancia_proactiva, 'cron', hour=19, minute=0, timezone=tz_mex, args=[app])
-    
+    tz = pytz.timezone('America/Mexico_City')
+    s.add_job(rutina_buenos_dias, 'cron', hour=8, minute=0, timezone=tz, args=[app])
+    s.add_job(vigilancia_proactiva, 'cron', hour=13, minute=0, timezone=tz, args=[app])
+    s.add_job(vigilancia_proactiva, 'cron', hour=19, minute=0, timezone=tz, args=[app])
     s.start()
-    logger.info("⏰ Cronograma iniciado (Hora México)")
+    logger.info("⏰ Cronograma OK")
 
-# --- COMANDOS ---
-
+# --- COMANDOS (TODOS RESTAURADOS) ---
 async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
-    if not prompt:
-        await update.message.reply_text("🎨 Uso: `/imagina robot`")
-        return
+    if not prompt: return await update.message.reply_text("🎨 Uso: `/imagina robot`")
     msg = await update.message.reply_text(f"🎨 Imaginando '{prompt}'...")
-    seed = random.randint(1, 1000000)
-    image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt.replace(' ', '%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    seed = random.randint(1, 1e6)
+    url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
-        response = requests.get(image_url, timeout=20)
-        if response.status_code == 200:
-            await update.message.reply_photo(photo=response.content)
-            await msg.delete()
-        else: await msg.edit_text("⚠️ Error generando imagen.")
-    except: await msg.edit_text("⚠️ Error de conexión.")
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200: await update.message.reply_photo(photo=r.content); await msg.delete()
+        else: await msg.edit_text("⚠️ Error imagen.")
+    except: await msg.edit_text("⚠️ Error conexión.")
 
 async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tag = " ".join(context.args).strip() or "pixel-art"
     await update.message.reply_chat_action("typing")
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(f"[https://itch.io/game-assets/free/tag-](https://itch.io/game-assets/free/tag-){tag}", headers=headers, timeout=10)
+        r = requests.get(f"https://itch.io/game-assets/free/tag-{tag}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
             picks = random.sample(games, min(len(games), 3))
-            lista = []
-            for g in picks:
-                t = g.find('div', 'game_title').text.strip()
-                l_elem = g.find('a', 'game_title')
-                l = l_elem['href'] if l_elem else g.find('a')['href']
-                lista.append(f"- [{t}]({l})")
-            msg = "\n".join(lista)
-            await update.message.reply_text(f"🔍 **{tag}:**\n{msg}", parse_mode="Markdown")
-        else: await update.message.reply_text("❌ Nada encontrado.")
-    except: await update.message.reply_text("❌ Error Itch.io")
+            lista = [f"- [{g.find('div','game_title').text.strip()}]({g.find('a')['href']})" for g in picks]
+            await update.message.reply_text(f"🔍 **{tag}:**\n" + "\n".join(lista), parse_mode="Markdown")
+        else: await update.message.reply_text("❌ Nada.")
+    except: await update.message.reply_text("❌ Error Itch.")
 
 async def cmd_arbol(u, c):
-    if not repo_obj: return await u.message.reply_text("❌ Desconectado")
+    if not repo_obj: return await u.message.reply_text("❌ Sin Repo")
     await u.message.reply_chat_action("typing")
     try:
-        c_list = repo_obj.get_contents("")
+        q = [repo_obj.get_contents("")]
         msg = "📂 **Repo:**\n"
-        q = [c_list] if isinstance(c_list, list) else [[c_list]]
         count = 0
         while q and count < 20:
             items = q.pop(0)
             if not isinstance(items, list): items = [items]
             for i in items:
-                if i.type == "dir":
-                    msg += f"📁 /{i.path}\n"
-                    try: q.append(repo_obj.get_contents(i.path))
-                    except: pass
-                else: msg += f"📄 {i.path}\n"
+                msg += f"{'📁' if i.type=='dir' else '📄'} {i.path}\n"
+                if i.type == "dir": q.append(repo_obj.get_contents(i.path))
                 count += 1
         await u.message.reply_text(msg)
-    except: await u.message.reply_text("Error leyendo repo.")
+    except: await u.message.reply_text("Error repo.")
 
-async def cmd_leer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return await update.message.reply_text("📂 Uso: /leer archivo.py")
-    file_path = context.args[0]
-    if not repo_obj: return await update.message.reply_text("⚠️ Sin repo.")
+async def cmd_leer(u, c):
+    if not c.args: return await u.message.reply_text("Uso: /leer archivo")
+    if not repo_obj: return await u.message.reply_text("❌ Sin Repo")
     try:
-        contents = repo_obj.get_contents(file_path)
-        code = contents.decoded_content.decode("utf-8")
-        global ultimo_codigo_leido
-        ultimo_codigo_leido = code
-        if len(code) > 3000: code = code[:3000] + "\n... (truncado)"
-        await update.message.reply_text(f"📄 **{file_path}**:\n```\n{code}\n```", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"⚠️ Error: {e}")
+        code = repo_obj.get_contents(c.args[0]).decoded_content.decode()
+        global ultimo_codigo_leido; ultimo_codigo_leido = code
+        await u.message.reply_text(f"📄 **{c.args[0]}**:\n```\n{code[:3000]}\n```", parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text(f"⚠️ {e}")
 
 async def cmd_run(u, c):
     code = u.message.text.replace("/run", "").strip()
-    if any(x in code for x in ["os.system", "subprocess", "rm -rf"]): return await u.message.reply_text("⛔ Prohibido.")
-    old = sys.stdout
-    sys.stdout = new = io.StringIO()
-    try:
-        exec(code)
-        await u.message.reply_text(f"🐍 Output:\n```\n{new.getvalue()}\n```", parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"💥 Error: {e}")
+    if any(x in code for x in ["os.system", "rm -rf"]): return await u.message.reply_text("⛔")
+    old = sys.stdout; sys.stdout = new = io.StringIO()
+    try: exec(code); await u.message.reply_text(f"```\n{new.getvalue()}\n```", parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text(f"💥 {e}")
     finally: sys.stdout = old
 
 async def cmd_codear(u, c):
@@ -315,7 +281,7 @@ async def cmd_codear(u, c):
     if " " in txt:
         f, cont = txt.split(" ", 1)
         res = subir_archivo_github(f, cont)
-        await u.message.reply_text(f"🚀 {res}" if res else "❌ Error.")
+        await u.message.reply_text(f"🚀 {res}")
 
 async def cmd_conectar(u, c):
     global repo_obj
@@ -329,71 +295,46 @@ async def cmd_hecho(u, c):
     if c.args: cerrar_tarea_db(int(c.args[0])); await u.message.reply_text("🔥")
 async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
-    await u.message.reply_text(f"📊 **Lía v6.0 (Senior C/C++)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
+    await u.message.reply_text(f"📊 **Lía v7.1 (Full+Senior)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
-# --- HANDLERS TEXTO (LA MAGIA ESTÁ AQUÍ) ---
+# --- HANDLERS TEXTO ---
 async def recibir_archivo(u, c):
     if u.message.document.file_size < 1e6:
         f = await c.bot.get_file(u.message.document.file_id)
         txt = (await f.download_as_bytearray()).decode()
-        global ultimo_codigo_leido
-        ultimo_codigo_leido = txt
+        global ultimo_codigo_leido; ultimo_codigo_leido = txt
         await u.message.reply_text(cerebro_lia(f"Analiza:\n{txt}", "User"), parse_mode="Markdown")
 
 async def chat_texto(u, c):
-    user_name = u.effective_user.first_name
-    
-    # 1. Pensar respuesta
     await u.message.reply_chat_action("typing")
-    resp = cerebro_lia(u.message.text, user_name)
+    resp = cerebro_lia(u.message.text, u.effective_user.first_name)
     
-    # 2. Detectar si Lía quiere crear archivos ([[FILE: ...]] ... [[ENDFILE]])
+    # Procesar Archivos
     acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
-    
-    mensajes_accion = []
-    
+    msgs = []
     if acciones:
         for ruta, contenido in acciones:
-            resultado = subir_archivo_github(ruta.strip(), contenido.strip(), msg=f"Lía Auto-Dev: {ruta}")
-            mensajes_accion.append(f"🛠️ {resultado}")
+            res = subir_archivo_github(ruta.strip(), contenido.strip())
+            msgs.append(f"🛠️ {res}")
+            resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"\n*(Code applied to {ruta})*\n")
             
-            # Limpiar el bloque para que no salga en el chat
-            bloque_completo = f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]"
-            resp = resp.replace(bloque_completo, f"\n*(Archivo {ruta} subido al repo)*\n")
-
-    # 3. Enviar respuesta normal
     await u.message.reply_text(resp)
-    
-    # 4. Enviar confirmaciones
-    if mensajes_accion:
-        await u.message.reply_text("\n".join(mensajes_accion), parse_mode="Markdown")
-        
-    # 5. Audio ocasional
+    if msgs: await u.message.reply_text("\n".join(msgs), parse_mode="Markdown")
     if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
 
-# --- SERVER WEB ---
-class HealthHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args): pass 
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler) 
-    server.serve_forever()
+# --- SERVER ---
+class H(BaseHTTPRequestHandler):
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+def run_server(): HTTPServer(('0.0.0.0', int(os.environ.get("PORT",8080))), H).serve_forever()
 
 # --- MAIN ---
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
+    # Registrar TODOS los comandos
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía v6.0 (Senior) Lista.")), 
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v7.1 (Senior+Tools) Lista.")), 
         ("status", cmd_status), ("conectar", cmd_conectar),
         ("imagina", cmd_imagina), ("assets", cmd_assets),
         ("arbol", cmd_arbol), ("leer", cmd_leer),
@@ -405,5 +346,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v6.0 SENIOR MODE INICIADA <<<")
+    print(">>> LÍA v7.1 COMPLETE SYSTEM STARTED <<<")
     app.run_polling()
