@@ -20,7 +20,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import edge_tts
 from supabase import create_client, Client
 from github import Github, Auth 
-
+from PIL import Image, ImageOps
+import io
 # --- LOGS ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -138,10 +139,22 @@ def crear_issue_github(titulo, body, labels=[]):
 def subir_archivo_github(path, cont, msg="Dev: Update por Lía"):
     if not repo_obj: return "❌ Error: No hay repo conectado."
     try:
+        # 1. INTENTO DE BACKUP (Solo si el archivo ya existe)
+        try:
+            archivo_viejo = repo_obj.get_contents(path)
+            # Si existe, guardamos una copia en la carpeta 'backups/'
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            nombre_backup = f"backups/{path.replace('/', '_')}_{timestamp}.bak"
+            repo_obj.create_file(nombre_backup, f"Backup antes de tocar {path}", archivo_viejo.decoded_content)
+            logger.info(f"🛡️ Backup creado: {nombre_backup}")
+        except:
+            pass # Si el archivo es nuevo, no hay backup que hacer
+
+        # 2. ACTUALIZACIÓN NORMAL
         try:
             c = repo_obj.get_contents(path)
             repo_obj.update_file(c.path, msg, cont, c.sha)
-            return f"Actualizado: `{path}`"
+            return f"Actualizado: `{path}` (Backup guardado)"
         except:
             repo_obj.create_file(path, msg, cont)
             return f"Creado: `{path}`"
@@ -174,6 +187,46 @@ def borrar_archivo_github(path, msg="Lia: Limpieza"):
         return f"🗑️ Borrado: {path}"
     except Exception as e: return f"⚠️ Error borrando: {e}"
 
+# --- PEGAR AQUÍ LA FUNCIÓN DE CONVERSIÓN ---
+def convertir_imagen_a_gba(image_bytes, nombre="sprite"):
+    """Convierte una imagen PNG/JPG a array de C para GBA (Mode 3 / Linear)"""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    
+    # Redimensionar si es gigante (Opcional, protección de memoria)
+    # GBA pantalla es 240x160. Si es mayor, avisamos (pero convertimos igual por si es un mapa)
+    w, h = img.size
+    pixels = list(img.getdata())
+    
+    hex_data = []
+    for r, g, b in pixels:
+        # Conversión matemática a GBA (5 bits por canal)
+        # Fórmula: (Blue << 10) | (Green << 5) | Red
+        gba_val = ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3)
+        hex_data.append(f"0x{gba_val:04X}")
+    
+    # Formatear el código C
+    c_code = (
+        f"// Generado por Lia Art Studio\n"
+        f"// Dimensiones: {w}x{h}\n"
+        f"const unsigned short {nombre}_data[{w * h}] = {{\n"
+    )
+    
+    # Agrupamos de 8 en 8 para que se vea bonito
+    for i in range(0, len(hex_data), 8):
+        linea = ", ".join(hex_data[i:i+8])
+        c_code += f"    {linea},\n"
+        
+    c_code += "};\n"
+    
+    h_code = (
+        f"// Header file para {nombre}\n"
+        f"#define {nombre.upper()}_WIDTH {w}\n"
+        f"#define {nombre.upper()}_HEIGHT {h}\n"
+        f"extern const unsigned short {nombre}_data[{w * h}];\n"
+    )
+    
+    return c_code, h_code, w, h
+    
 # --- CEREBRO (FULL) ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ Faltan ojos (GROQ_API_KEY)"
@@ -232,14 +285,19 @@ async def generar_audio_tts(texto, chat_id, context):
 # --- RUTINAS ---
 async def rutina_buenos_dias(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
-    frases = ["¡Buenos días! Sistemas listos.", "Arriba. Hay código que optimizar.", "Compilador en espera."]
+    frases = "¡Buenos días! Sistemas listos.", "Arriba. Hay código que optimizar.", "Compilador en espera."
     await context.bot.send_message(chat_id=MY_CHAT_ID, text=random.choice(frases))
 
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
     try:
+        # Lista de temas posibles para variar
+        temas = ["pixel-art", "sprites", "textures", "backgrounds", "chiptune", "fonts"]
+        tema_del_dia = random.choice(temas)
+        
         headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get("[https://itch.io/game-assets/free/tag-pixel-art](https://itch.io/game-assets/free/tag-pixel-art)", headers=headers, timeout=10)
+        # Usamos el tema aleatorio
+        r = requests.get(f"https://itch.io/game-assets/free/tag-{tema_del_dia}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
@@ -268,7 +326,7 @@ async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt: return await update.message.reply_text("🎨 Uso: `/imagina robot`")
     msg = await update.message.reply_text(f"🎨 Imaginando '{prompt}'...")
     seed = random.randint(1, 1e6)
-    url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt.replace(' ','%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
         r = requests.get(url, timeout=20)
         if r.status_code == 200: await update.message.reply_photo(photo=r.content); await msg.delete()
@@ -280,15 +338,22 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_chat_action("typing")
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(f"[https://itch.io/game-assets/free/tag-](https://itch.io/game-assets/free/tag-){tag}", headers=headers, timeout=10)
+        # URL corregida: Sin corchetes [] ni paréntesis () del markdown
+        url = f"https://itch.io/game-assets/free/tag-{tag}"
+        
+        r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
+        
         if games:
             picks = random.sample(games, min(len(games), 3))
             lista = [f"- [{g.find('div','game_title').text.strip()}]({g.find('a')['href']})" for g in picks]
             await update.message.reply_text(f"🔍 **{tag}:**\n" + "\n".join(lista), parse_mode="Markdown")
-        else: await update.message.reply_text("❌ Nada.")
-    except: await update.message.reply_text("❌ Error Itch.")
+        else: 
+            await update.message.reply_text("❌ Nada encontrado.")
+    except Exception as e: 
+        # Agregué {e} para que si falla de nuevo, te diga exactamente por qué
+        await update.message.reply_text(f"❌ Error Itch: {e}")
 
 async def cmd_arbol(u, c):
     if not repo_obj: return await u.message.reply_text("❌ Sin Repo")
@@ -345,6 +410,145 @@ async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
     await u.message.reply_text(f"📊 **Lía v8.0 (Full + AutoFix)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
+async def cmd_review(u, c):
+    if not c.args: return await u.message.reply_text("Uso: /review src/main.c")
+    archivo = c.args[0]
+    
+    if not repo_obj: return await u.message.reply_text("❌ Sin repo.")
+    await u.message.reply_chat_action("typing")
+    
+    try:
+        # 1. Leer código
+        codigo = repo_obj.get_contents(archivo).decoded_content.decode()
+        
+        # 2. Prompt de Auditoría
+        prompt = f"""
+        [MODO: SENIOR CODE REVIEWER]
+        Analiza el siguiente código C para Game Boy Advance.
+        NO ESCRIBAS CÓDIGO NUEVO. Solo dame un reporte de auditoría.
+        
+        Aspectos a criticar:
+        1. Legibilidad (nombres de variables, indentación).
+        2. Optimización (uso de memoria, bucles innecesarios).
+        3. Posibles bugs o malas prácticas en C.
+        4. Sugerencias de mejora.
+        
+        [CÓDIGO]
+        {codigo[:3000]}
+        """
+        
+        # 3. Respuesta
+        respuesta = cerebro_lia(prompt, "Senior Reviewer")
+        await u.message.reply_text(f"🧐 **Reporte de {archivo}:**\n\n{respuesta}", parse_mode="Markdown")
+        
+    except Exception as e:
+        await u.message.reply_text(f"⚠️ No pude leer {archivo}: {e}")
+
+async def cmd_gba(u, c):
+    """Consulta técnica sobre hardware de GBA"""
+    if not c.args: return await u.message.reply_text("Uso: /gba [tema]")
+    
+    consulta = " ".join(c.args)
+    await u.message.reply_chat_action("typing")
+    
+    # TÉCNICA SEGURA: Usamos paréntesis para el texto. 
+    # Así es imposible que se rompa el color del editor.
+    prompt = (
+        f"[ROL: EXPERTO EN HARDWARE GAME BOY ADVANCE]\n"
+        f"El usuario pregunta sobre: '{consulta}'.\n\n"
+        "1. Responde con datos técnicos precisos (Direcciones de memoria Hex, Registros, Bits).\n"
+        "2. Si aplica, dame un mini-ejemplo en C (código breve).\n"
+        "3. Sé conciso. No divagues."
+    )
+    
+    try:
+        respuesta = cerebro_lia(prompt, "GBA Expert")
+        await u.message.reply_text(f"👾 **GBA Docs:**\n{respuesta}", parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text(f"Error: {e}")
+
+# FÍJATE AQUÍ: Esta línea debe estar TOTALMENTE a la izquierda, sin espacios.
+async def cmd_readme(u, c):
+    """Genera automáticamente el archivo README.md del repo"""
+    if not repo_obj: return await u.message.reply_text("❌ Sin repo conectado.")
+    await u.message.reply_text("✍️ Redactando documentación del proyecto...")
+    await u.message.reply_chat_action("typing")
+    
+    try:
+        try:
+            main_code = repo_obj.get_contents("src/main.c").decoded_content.decode()
+        except:
+            main_code = "No se encontró main.c"
+
+        # TÉCNICA SEGURA TAMBIÉN AQUÍ
+        prompt = (
+            "[ROL: TECHNICAL WRITER]\n"
+            "Genera un archivo README.md profesional para este proyecto de GBA.\n\n"
+            f"[CÓDIGO PRINCIPAL]\n{main_code[:2000]}\n\n"
+            "[REQUISITOS]\n"
+            "1. Título Creativo (Invéntalo basado en el código).\n"
+            "2. Descripción: Qué hace el juego/demo.\n"
+            "3. Estructura: Explica brevemente qué es src/main.c.\n"
+            "4. Compilación: Menciona que usa Makefile y DevKitPro.\n"
+            "5. Formato: Markdown bonito (badges, emojis)."
+        )
+        
+        contenido_readme = cerebro_lia(prompt, "Tech Writer")
+        
+        res = subir_archivo_github("README.md", contenido_readme, "Docs: Auto-update README")
+        await u.message.reply_text(f"✅ **Documentación actualizada:**\n{res}")
+        
+    except Exception as e:
+        await u.message.reply_text(f"❌ Error: {e}")
+
+async def handle_photo(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Recibe imágenes, las convierte Y LAS SUBE al repo automáticamente"""
+    if not MY_CHAT_ID or str(u.effective_chat.id) != MY_CHAT_ID: return
+    
+    # 1. Verificamos si hay repo conectado
+    if not repo_obj:
+        return await u.message.reply_text("❌ Primero conecta un repo con /conectar")
+
+    photo = u.message.photo[-1]
+    file_id = photo.file_id
+    
+    await u.message.reply_chat_action("upload_document")
+    await u.message.reply_text("🎨 **Procesando arte...** Subiendo a GitHub.", parse_mode="Markdown")
+    
+    try:
+        # 2. Descargar y Convertir
+        new_file = await c.bot.get_file(file_id)
+        f = await new_file.download_as_bytearray()
+        
+        # Generamos un nombre único (ej: sprite_1430)
+        hora = datetime.now().strftime('%M%S')
+        nombre_asset = f"sprite_{hora}" 
+        
+        # Convertimos la data
+        c_code, h_code, w, h = convertir_imagen_a_gba(f, nombre_asset)
+        
+        # 3. SUBIDA AUTOMÁTICA A GITHUB ☁️
+        # Los guardamos en src/ para que el Makefile los detecte solo
+        path_c = f"src/{nombre_asset}.c"
+        path_h = f"src/{nombre_asset}.h"
+        
+        res_c = subir_archivo_github(path_c, c_code, f"Art: Nuevo asset {nombre_asset}")
+        res_h = subir_archivo_github(path_h, h_code, f"Art: Header {nombre_asset}")
+        
+        # 4. Informe final
+        msg = (
+            f"✅ **Arte integrado en el proyecto:**\n"
+            f"📍 `{path_c}`\n"
+            f"📍 `{path_h}`\n\n"
+            f"📐 Tamaño: {w}x{h}\n"
+            f"💡 **Para usarlo en main.c:**\n"
+            f"1. `#include \"{nombre_asset}.h\"`\n"
+            f"2. Usa el array: `{nombre_asset}_data`"
+        )
+        await u.message.reply_text(msg, parse_mode="Markdown")
+        
+    except Exception as e:
+        await u.message.reply_text(f"❌ Error subiendo asset: {e}")
 # --- HELPER: ENVIAR MENSAJE DESDE WEBHOOK (NUEVO) ---
 def notificar_telegram(texto):
     """Envía mensaje a Telegram de forma segura desde otro hilo"""
@@ -522,22 +726,47 @@ if __name__ == '__main__':
     print("⏳ Esperando limpieza de sockets (2s)...")
     time.sleep(2)
 
+    # Iniciar servidor web (para que Render no se duerma)
     threading.Thread(target=run_server, daemon=True).start()
+    
+    # Construir la aplicación
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
+    # --- LISTA DE COMANDOS ---
     cmds = [
         ("start", lambda u,c: u.message.reply_text("⚡ Lía v8.0 (Full) Lista.")), 
-        ("status", cmd_status), ("conectar", cmd_conectar),
-        ("imagina", cmd_imagina), ("assets", cmd_assets),
-        ("arbol", cmd_arbol), ("leer", cmd_leer),
-        ("run", cmd_run), ("codear", cmd_codear), 
-        ("tarea", cmd_tarea), ("pendientes", cmd_pendientes), ("hecho", cmd_hecho),
+        ("status", cmd_status), 
+        ("conectar", cmd_conectar),
+        ("imagina", cmd_imagina), 
+        ("assets", cmd_assets),
+        ("arbol", cmd_arbol), 
+        ("leer", cmd_leer),
+        ("run", cmd_run), 
+        ("codear", cmd_codear), 
+        ("tarea", cmd_tarea), 
+        ("pendientes", cmd_pendientes), 
+        ("hecho", cmd_hecho),
+        ("review", cmd_review), # Auditoría de código
+        ("gba", cmd_gba),       # Consulta técnica
+        ("readme", cmd_readme), # Documentación auto
     ]
-    for c, f in cmds: app.add_handler(CommandHandler(c, f))
     
+    # Registramos los comandos de barra (/)
+    for c, f in cmds: 
+        app.add_handler(CommandHandler(c, f))
+    
+    # --- HANDLERS DE MENSAJES (Sin comando /) ---
+    
+    # 1. Para archivos (Código, zips, etc)
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v8.0 FULL SYSTEM STARTED <<<")
-    app.run_polling()
+    # 2. Para FOTOS (El nuevo convertidor de Sprites) 🎨
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    # 3. Para texto normal (Chat con IA) - Este siempre va al final de los handlers
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
 
+    print("🤖 Lia v8.0 Artista está lista...")
+    
+    # Esto mantiene al bot corriendo
+    app.run_polling()
