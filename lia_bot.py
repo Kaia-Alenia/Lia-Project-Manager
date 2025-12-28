@@ -419,6 +419,11 @@ async def chat_texto(u, c):
 
 # --- SERVIDOR WEBHOOK (OÍDOS DE LIA) ---
 class WebhookHandler(BaseHTTPRequestHandler):
+    # ESTO ES LO NUEVO QUE NECESITAS AGREGAR:
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
@@ -491,3 +496,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
+
