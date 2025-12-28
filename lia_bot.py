@@ -363,33 +363,70 @@ def notificar_telegram(texto):
         except Exception as e:
             logger.error(f"Fallo al notificar Telegram: {e}")
 
-# --- SERVER WEBHOOK & AUTO-FIX (CLASE MEJORADA) ---
+# --- SERVER WEBHOOK & AUTO-FIX (CEREBRO CONTEXTUAL) ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def _set_response(self):
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
 
+    def obtener_codigo_actual(self, error_log):
+        """Intenta deducir qué archivo falló y descargarlo de GitHub"""
+        # Buscamos patrones como "src/main.c:55: error:"
+        match = re.search(r"([a-zA-Z0-9_\/]+\.c):\d+", error_log)
+        if match:
+            ruta = match.group(1)
+            try:
+                # Usamos la variable global repo_obj
+                file_content = repo_obj.get_contents(ruta).decoded_content.decode()
+                return ruta, file_content
+            except Exception as e:
+                logger.error(f"No pude descargar {ruta}: {e}")
+                return ruta, None
+        return None, None
+
     def procesar_error_github(self, error_log):
-        """Lia lee el error y decide cómo arreglarlo (Versión Blindada)"""
-        logger.info("🚨 ERROR DE COMPILACIÓN RECIBIDO")
-        notificar_telegram(f"🚨 **Alerta de Compilación:**\n`{error_log[:500]}...`\n\n*Lia está pensando...*")
+        """Lia lee el CÓDIGO ACTUAL + EL ERROR y repara solo lo necesario"""
+        logger.info("🚨 ERROR DE COMPILACIÓN - INICIANDO PROTOCOLO DE REPARACIÓN")
         
+        # 1. Identificar archivo culpable y leer su contenido
+        archivo_culpable, codigo_roto = self.obtener_codigo_actual(error_log)
+        
+        contexto_archivo = ""
+        if archivo_culpable and codigo_roto:
+            logger.info(f"🧐 Analizando archivo: {archivo_culpable}")
+            contexto_archivo = f"""
+            [CÓDIGO ACTUAL EN REPO (ROTO)]
+            Nombre: {archivo_culpable}
+            Contenido:
+            ```c
+            {codigo_roto}
+            ```
+            """
+            notificar_telegram(f"🚨 **Fallo en {archivo_culpable}**\n`{error_log[:200]}...`\n\n*Lia está leyendo el archivo para corregirlo...*")
+        else:
+            notificar_telegram(f"🚨 **Error General:**\n`{error_log[:200]}...`\n\n*Lia intentará arreglarlo a ciegas...*")
+
+        # 2. Prompt de Ingeniería Quirúrgica
         prompt_fix = f"""
-        [MODO DEBUGGER: ACTIVADO]
-        Lia, tu último código falló en la compilación.
+        [MODO: SENIOR SOFTWARE ENGINEER]
+        Tienes un error de compilación en un proyecto GBA.
         
-        ERRORES REPORTADOS:
+        {contexto_archivo}
+        
+        [ERRORES REPORTADOS POR GCC]
         {error_log}
         
-        TU TAREA:
-        1. ANALIZA: ¿Es sintaxis, linker o lógica?
-        2. ACCIÓN: Reescribe SOLO el archivo afectado completo y corregido.
+        [TU MISIÓN - CRÍTICO]
+        1. **NO REESCRIBAS LA LÓGICA:** Tu único trabajo es arreglar el error de sintaxis o compilación.
+        2. **PRESERVA EL CÓDIGO:** Si el usuario tenía un cuadrado azul, DEBE SEGUIR SIENDO AZUL. No inventes "Hola Mundo" ni pantallas blancas.
+        3. **CORRIGE EL ERROR:** Si falta una llave '}}', ponla. Si falta un ';', ponlo. Si hay un '?' sabotaje, bórralo.
+        4. **SALIDA:** Devuelve el archivo {archivo_culpable or 'src/main.c'} COMPLETO y CORREGIDO.
         
-        Responde formato: [[FILE: ...]] código [[ENDFILE]].
+        Responde formato: [[FILE: ruta/archivo.c]] código [[ENDFILE]].
         """
         
-        respuesta = cerebro_lia(prompt_fix, "Compilador")
+        respuesta = cerebro_lia(prompt_fix, "Senior Dev")
         archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
         
         fix_log = []
@@ -401,12 +438,13 @@ class WebhookHandler(BaseHTTPRequestHandler):
             
             if len(contenido_limpio) < 10: continue
 
-            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
+            # Subimos el fix
+            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Fix Quirúrgico por Lia")
             fix_log.append(res)
-            logger.info(f"✅ Auto-Fix Aplicado: {res}")
+            logger.info(f"✅ Fix Aplicado: {res}")
             
         if fix_log:
-            notificar_telegram("🚑 **Solución Aplicada:**\n" + "\n".join(fix_log) + "\n*Recompilando...*")
+            notificar_telegram("✅ **Corrección Aplicada:**\n" + "\n".join(fix_log) + "\n*Respetando lógica original. Recompilando...*")
 
     def do_HEAD(self):
         self.send_response(200)
@@ -418,18 +456,15 @@ class WebhookHandler(BaseHTTPRequestHandler):
             post_bytes = self.rfile.read(content_length)
             post_str = post_bytes.decode('utf-8')
             
-            logger.info(f"📩 RECIBIDO: {post_str[:100]}...") 
-
             # 1. TEXTO PLANO (CURL DEL ACTION)
             if not post_str.strip().startswith("{"):
-                if "error" in post_str.lower() or "failed" in post_str.lower():
+                if "error" in post_str.lower() or "failed" in post_str.lower() or "fatal" in post_str.lower():
                     self.procesar_error_github(post_str)
                 elif "exito" in post_str.lower() or "success" in post_str.lower():
-                    notificar_telegram(f"🎉 **Noticia:**\n{post_str}")
+                    notificar_telegram(f"🎉 **¡COMPILACIÓN EXITOSA!**\nLa ROM está lista y funcionando.")
 
             # 2. JSON (WEBHOOK NATIVO)
             elif post_str.strip().startswith("{"):
-                # Aquí iría lógica extra para JSON nativo si la usas
                 pass
                 
         except Exception as e:
@@ -437,10 +472,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         self._set_response()
         self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
-
-    def do_GET(self):
-        self._set_response()
-        self.wfile.write(json.dumps({'status': 'running'}).encode('utf-8'))
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -509,3 +540,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v8.0 FULL SYSTEM STARTED <<<")
     app.run_polling()
+
