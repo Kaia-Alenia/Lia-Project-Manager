@@ -444,28 +444,38 @@ async def cmd_review(u, c):
     except Exception as e:
         await u.message.reply_text(f"⚠️ No pude leer {archivo}: {e}")
 
-async def cmd_gba(u, c):
-    """Consulta técnica sobre hardware de GBA"""
-    if not c.args: return await u.message.reply_text("Uso: /gba [tema]")
+async def cmd_gba(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pregunta = " ".join(context.args)
+    if not pregunta:
+        await update.message.reply_text("⚙️ **Consultor Técnico GBA**\nUso: `/gba como activo modo 4`")
+        return
+
+    # Mensaje temporal de "Pensando..."
+    avisar = await update.message.reply_text("🧠 *Analizando registros de memoria...*", parse_mode='Markdown')
     
-    consulta = " ".join(c.args)
-    await u.message.reply_chat_action("typing")
+    prompt = f"""
+    [ROLE: GBA Hardware Engineer]
+    Eres un experto en hardware de Game Boy Advance (libgba, registers).
+    Responde a esto de forma técnica pero breve. Usa bloques de código C.
+    Pregunta: {pregunta}
+    """
     
-    # TÉCNICA SEGURA: Usamos paréntesis para el texto. 
-    # Así es imposible que se rompa el color del editor.
-    prompt = (
-        f"[ROL: EXPERTO EN HARDWARE GAME BOY ADVANCE]\n"
-        f"El usuario pregunta sobre: '{consulta}'.\n\n"
-        "1. Responde con datos técnicos precisos (Direcciones de memoria Hex, Registros, Bits).\n"
-        "2. Si aplica, dame un mini-ejemplo en C (código breve).\n"
-        "3. Sé conciso. No divagues."
-    )
+    respuesta = cerebro_lia(prompt, "GBA Engineer")
     
+    # --- BLINDAJE ANTI-ERROR DE TELEGRAM ---
     try:
-        respuesta = cerebro_lia(prompt, "GBA Expert")
-        await u.message.reply_text(f"👾 **GBA Docs:**\n{respuesta}", parse_mode="Markdown")
-    except Exception as e:
-        await u.message.reply_text(f"Error: {e}")
+        # 1. Intentamos enviar con formato Markdown (Bonito)
+        await update.message.reply_text(respuesta, parse_mode='Markdown')
+    except Exception:
+        # 2. Si falla (porque el código C tiene guiones bajos _ que confunden a Telegram),
+        # lo enviamos como texto plano. Se ve menos bonito pero SIEMPRE LLEGA.
+        await update.message.reply_text(respuesta)
+
+    # Borramos el mensaje de "Pensando..." para limpiar el chat
+    try:
+        await avisar.delete()
+    except:
+        pass
 
 # FÍJATE AQUÍ: Esta línea debe estar TOTALMENTE a la izquierda, sin espacios.
 async def cmd_readme(u, c):
@@ -848,6 +858,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
