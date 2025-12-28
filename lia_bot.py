@@ -389,12 +389,62 @@ async def cmd_run(u, c):
     except Exception as e: await u.message.reply_text(f"💥 {e}")
     finally: sys.stdout = old
 
-async def cmd_codear(u, c):
-    txt = u.message.text.replace("/codear ", "").strip()
-    if " " in txt:
-        f, cont = txt.split(" ", 1)
-        res = subir_archivo_github(f, cont)
-        await u.message.reply_text(f"🚀 {res}")
+async def cmd_codear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    peticion = " ".join(context.args)
+    if not peticion:
+        await update.message.reply_text("❌ Uso: `/codear haz que el fondo sea verde`")
+        return
+
+    # 1. Avisar que Lía está pensando
+    msg_espera = await update.message.reply_text("🧠 *Lía está programando...*")
+
+    # 2. Obtener lista de archivos para que sepa dónde está parada
+    try:
+        contents = repo_obj.get_contents("")
+        archivos_en_repo = [f.path for f in contents if f.type == "file"]
+    except:
+        archivos_en_repo = ["src/main.c"]
+
+    # 3. Prompt para la IA (Aquí es donde ocurre la magia)
+    prompt = f"""
+    [MODO: SENIOR DEVELOPER GBA]
+    Eres un programador experto en C para Game Boy Advance.
+    Tu misión es modificar o crear código basado en la petición del usuario.
+    
+    [PROYECTO ACTUAL]
+    Archivos disponibles: {archivos_en_repo}
+    
+    [REGLAS]
+    1. Si la petición implica modificar algo existente, busca el archivo correcto (ej: src/main.c).
+    2. Responde ÚNICAMENTE en este formato: [[FILE: ruta/archivo.c]] codigo [[ENDFILE]].
+    3. NO incluyas explicaciones fuera del formato.
+    4. Usa lógica real de GBA (registros, modo 3, etc.).
+    
+    Petición: {peticion}
+    """
+
+    # 4. Llamar al cerebro
+    respuesta = cerebro_lia(prompt, "Senior Dev")
+
+    # 5. Procesar la respuesta y subir a GitHub
+    archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
+    
+    if not archivos:
+        # Si la IA no usó el formato, intentamos una última vez con el texto plano
+        await update.message.reply_text("⚠️ No pude formatear el código. Prueba ser más específico.")
+        return
+
+    res_final = []
+    for ruta_raw, contenido in archivos:
+        ruta = ruta_raw.strip()
+        contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
+        
+        # Subir a GitHub
+        resultado = subir_archivo_github(ruta, contenido_limpio, msg="🚀 Update por Lía")
+        res_final.append(f"✅ `{ruta}`")
+
+    await msg_espera.delete()
+    await update.message.reply_text(f"🚀 **Cambios aplicados:**\n" + "\n".join(res_final))
 
 async def cmd_conectar(u, c):
     global repo_obj
@@ -512,10 +562,9 @@ async def cmd_readme(u, c):
         await u.message.reply_text(f"❌ Error: {e}")
 
 async def handle_photo(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    """Recibe imágenes, las convierte Y LAS SUBE al repo automáticamente"""
+    """Recibe imágenes, las limita a tamaño GBA y las sube"""
     if not MY_CHAT_ID or str(u.effective_chat.id) != MY_CHAT_ID: return
     
-    # 1. Verificamos si hay repo conectado
     if not repo_obj:
         return await u.message.reply_text("❌ Primero conecta un repo con /conectar")
 
@@ -523,42 +572,51 @@ async def handle_photo(u: Update, c: ContextTypes.DEFAULT_TYPE):
     file_id = photo.file_id
     
     await u.message.reply_chat_action("upload_document")
-    await u.message.reply_text("🎨 **Procesando arte...** Subiendo a GitHub.", parse_mode="Markdown")
     
     try:
-        # 2. Descargar y Convertir
+        # 1. Descargar
         new_file = await c.bot.get_file(file_id)
-        f = await new_file.download_as_bytearray()
+        f_bytes = await new_file.download_as_bytearray()
         
-        # Generamos un nombre único (ej: sprite_1430)
+        # --- NUEVA LÓGICA DE LIMITACIÓN ---
+        img = Image.open(io.BytesIO(f_bytes))
+        
+        # Si la imagen es más grande que un sprite máximo de GBA (64x64), la bajamos
+        # La GBA no maneja bien objetos más grandes de 64x64 por hardware
+        if img.width > 64 or img.height > 64:
+            img.thumbnail((64, 64), Image.Resampling.LANCZOS)
+            await u.message.reply_text("⚠️ Imagen muy grande. Redimensionando a 64x64 para GBA...")
+        
+        # Convertir de nuevo a bytes para la función de conversión
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        f_final = img_byte_arr.getvalue()
+        # ----------------------------------
+
         hora = datetime.now().strftime('%M%S')
         nombre_asset = f"sprite_{hora}" 
         
-        # Convertimos la data
-        c_code, h_code, w, h = convertir_imagen_a_gba(f, nombre_asset)
+        # Convertimos la data (ahora garantizada de máximo 64x64)
+        c_code, h_code, w, h = convertir_imagen_a_gba(f_final, nombre_asset)
         
-        # 3. SUBIDA AUTOMÁTICA A GITHUB ☁️
-        # Los guardamos en src/ para que el Makefile los detecte solo
         path_c = f"src/{nombre_asset}.c"
         path_h = f"src/{nombre_asset}.h"
         
-        res_c = subir_archivo_github(path_c, c_code, f"Art: Nuevo asset {nombre_asset}")
-        res_h = subir_archivo_github(path_h, h_code, f"Art: Header {nombre_asset}")
+        subir_archivo_github(path_c, c_code, f"Art: Nuevo asset {nombre_asset}")
+        subir_archivo_github(path_h, h_code, f"Art: Header {nombre_asset}")
         
-        # 4. Informe final
         msg = (
-            f"✅ **Arte integrado en el proyecto:**\n"
+            f"✅ **Arte integrado (Optimizado):**\n"
             f"📍 `{path_c}`\n"
             f"📍 `{path_h}`\n\n"
-            f"📐 Tamaño: {w}x{h}\n"
-            f"💡 **Para usarlo en main.c:**\n"
-            f"1. `#include \"{nombre_asset}.h\"`\n"
-            f"2. Usa el array: `{nombre_asset}_data`"
+            f"📐 Tamaño final: {w}x{h}\n"
+            f"💡 **Tip:** He limitado el tamaño a 64x64 para que la GBA pueda cargarlo en la memoria OAM."
         )
         await u.message.reply_text(msg, parse_mode="Markdown")
         
     except Exception as e:
-        await u.message.reply_text(f"❌ Error subiendo asset: {e}")
+        await u.message.reply_text(f"❌ Error procesando asset: {e}")
+        
 # --- HELPER: ENVIAR MENSAJE DESDE WEBHOOK (NUEVO) ---
 def notificar_telegram(texto):
     """Envía mensaje a Telegram de forma segura desde otro hilo"""
@@ -858,6 +916,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
