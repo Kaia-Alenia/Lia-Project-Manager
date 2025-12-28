@@ -76,15 +76,32 @@ GBA_SPECS = """
 """
 
 # --- FUNCIONES DB ---
-def leer_memoria_completa():
+def obtener_recuerdos_relevantes(query_usuario):
+    """Busca solo lo necesario en la DB para no saturar a Lia"""
     identidad = "Eres Lía, Ingeniera de Software Principal en Kaia Alenia."
-    aprendizajes = ""
+    
+    recuerdos = ""
     if supabase:
         try:
-            res = supabase.table("memoria").select("contenido").execute()
-            if res.data: aprendizajes = "\n".join([f"- {i['contenido']}" for i in res.data])
-        except: pass
-    return f"{identidad}\n\n[MEMORIA]:\n{aprendizajes}"
+            # Extraemos palabras clave simples del usuario para la búsqueda
+            palabras_clave = " ".join([w for w in query_usuario.split() if len(w) > 4]) or "general"
+            
+            # Intentamos usar RPC (asumiendo que existe la función 'buscar_recuerdos' en Supabase)
+            try:
+                res = supabase.rpc("buscar_recuerdos", {"query_text": palabras_clave}).execute()
+                if res.data:
+                    recuerdos = "\n".join([f"- {r['contenido']}" for r in res.data])
+            except:
+                res = None # Si falla RPC, pasamos al fallback
+
+            if not recuerdos:
+                # Fallback: Si no hay matches o RPC falla, traer los últimos 3 recuerdos generales
+                res = supabase.table("memoria").select("contenido").order("created_at", desc=True).limit(3).execute()
+                if res.data:
+                    recuerdos = "\n".join([f"- {r['contenido']}" for r in res.data])
+        except Exception as e: logger.error(f"Error Memoria: {e}")
+        
+    return f"{identidad}\n\n[MEMORIA RELEVANTE]:\n{recuerdos}"
 
 def guardar_aprendizaje(dato):
     if supabase:
@@ -164,9 +181,9 @@ def borrar_archivo_github(path, msg="Lia: Limpieza"):
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ Faltan ojos (GROQ_API_KEY)"
     
-    # 1. Obtenemos contexto fresco
-    memoria = leer_memoria_completa()
-    mapa_repo = obtener_estructura_repo() # <--- OJO AQUÍ
+    # 1. Obtenemos contexto fresco y relevante
+    memoria = obtener_recuerdos_relevantes(texto)
+    mapa_repo = obtener_estructura_repo()
     tareas = obtener_tareas_db()
     lista_tareas = "\n".join([f"- {t['descripcion']}" for t in tareas]) if tareas else "Sin pendientes."
     
@@ -400,14 +417,58 @@ async def chat_texto(u, c):
     if msgs_log: 
         await u.message.reply_text("\n".join(msgs_log))
 
-# --- SERVER ---
-class H(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
-    def do_HEAD(self): self.send_response(200); self.end_headers()
+# --- SERVIDOR WEBHOOK (OÍDOS DE LIA) ---
+class WebhookHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Lia Server Online")
+
+    def do_POST(self):
+        # 1. Recibir el error desde GitHub
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length).decode('utf-8')
+        
+        # 2. Responder a GitHub rápido para no dar timeout
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Recibido")
+        
+        # 3. Disparar proceso de corrección en segundo plano
+        # (Importante: Ejecutamos esto asíncronamente para no bloquear el server)
+        threading.Thread(target=self.procesar_error_github, args=(post_data,)).start()
+
+    def procesar_error_github(self, error_log):
+        """Lia lee el error y decide cómo arreglarlo"""
+        logger.info("🚨 ERROR DE COMPILACIÓN RECIBIDO")
+        
+        # Inyectamos el error en el cerebro de Lia
+        prompt_fix = f"""
+        [SISTEMA DE ALERTA CRÍTICA: FALLO DE COMPILACIÓN]
+        Lia, el código que subiste rompió el build.
+        
+        LOG DEL ERROR (GCC):
+        {error_log}
+        
+        TU MISIÓN:
+        1. Analiza el error (línea, archivo, tipo de error).
+        2. Revisa tu memoria de la estructura de archivos.
+        3. Genera el código corregido usando [[FILE: ...]].
+        """
+        
+        # Lia piensa
+        respuesta = cerebro_lia(prompt_fix, "Compilador")
+        
+        # Lia actúa (Reutilizamos lógica de chat_texto simplificada)
+        acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
+        for ruta, contenido in acciones:
+            contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
+            subir_archivo_github(ruta.strip(), contenido_limpio, msg="🚑 Hotfix por Compilador")
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), H)
+    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
+    logger.info(f"👂 Webhook activo en puerto {port}")
     server.serve_forever()
 
 # --- MAIN ---
