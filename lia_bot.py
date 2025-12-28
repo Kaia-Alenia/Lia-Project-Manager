@@ -378,7 +378,7 @@ async def chat_texto(u, c):
     await u.message.reply_text(resp, parse_mode="Markdown")
     if msgs_log: await u.message.reply_text("\n".join(msgs_log))
 
-# --- SERVER WEBHOOK & AUTO-FIX (CLASE CORREGIDA) ---
+# --- SERVER WEBHOOK & AUTO-FIX (CLASE CORREGIDA Y UNIFICADA) ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def _set_response(self):
         self.send_response(200)
@@ -430,42 +430,52 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length)
-        
+        # 1. LEER LOS DATOS (BYTES -> STRING)
         try:
-            payload = json.loads(post_data.decode('utf-8'))
-            
-            # GITHUB ACTION ERROR
-            if 'workflow_run' in payload and payload.get('action') == 'completed':
-                run = payload['workflow_run']
-                if run.get('conclusion') == 'failure':
-                    logger.info("❌ GitHub Action falló. Intentando leer logs...")
-                    # Truco: Si no podemos bajar logs complejos, usamos el mensaje de error si está disponible
-                    # O disparamos una revisión general
-                    try:
-                        repo_full_name = payload['repository']['full_name']
-                        run_id = run['id']
-                        # Simulamos leer el log del job (simplificado)
-                        log_text = f"Fallo en run {run_id}. Revisa main.c y Makefile."
-                        self.procesar_error_github(log_text)
-                    except Exception as e:
-                        logger.error(f"Error leyendo GitHub logs: {e}")
+            content_length = int(self.headers['Content-Length'])
+            post_bytes = self.rfile.read(content_length)
+            post_str = post_bytes.decode('utf-8')
+        except Exception as e:
+            logger.error(f"Error leyendo POST: {e}")
+            return
 
-            # TELEGRAM UPDATE (Solo si usas webhooks, pero no molesta)
-            elif 'message' in payload:
-                # Nota: Si usas polling, esto no se ejecutará normalmente, pero no rompe nada.
-                pass
+        # 2. LOGUEAR Y AVISAR A TELEGRAM (Para que tú lo veas)
+        logger.info(f"📩 RECIBIDO DE GITHUB: {post_str[:200]}...") # Logueamos solo el inicio para no saturar
+        
+        if MY_CHAT_ID:
+            # Enviamos el mensaje a Telegram sin bloquear el servidor
+            try:
+                msg_clean = post_str[:3000] # Telegram tiene límite de 4096 chars
+                asyncio.run_coroutine_threadsafe(
+                    app.bot.send_message(chat_id=MY_CHAT_ID, text=f"🔧 **GitHub Dice:**\n`{msg_clean}`", parse_mode="Markdown"),
+                    app.loop
+                )
+            except: pass
+
+        # 3. ANALIZAR SI HAY QUE ARREGLAR CÓDIGO (AUTO-FIX)
+        try:
+            # Parseamos el JSON con seguridad
+            if post_str.strip().startswith("{"):
+                payload = json.loads(post_str)
+                
+                # CASO A: ERROR EN GITHUB ACTIONS (El código está roto)
+                if 'workflow_run' in payload and payload.get('action') == 'completed':
+                    run = payload['workflow_run']
+                    if run.get('conclusion') == 'failure':
+                        logger.info("❌ GitHub Action falló. Disparando Auto-Fix...")
+                        run_id = run['id']
+                        # Como no tenemos el log completo, asumimos que Lia debe revisar sus últimos cambios
+                        # O usamos el mensaje si viene en el body
+                        self.procesar_error_github(f"Fallo crítico en Run ID {run_id}. Revisa main.c y Makefile.")
+
+            # Si no es JSON (es texto plano de curl), ya lo mandamos a Telegram arriba.
                 
         except Exception as e:
-            logger.error(f"Error procesando POST: {e}")
+            logger.error(f"Error procesando lógica JSON: {e}")
             
+        # 4. RESPONDER A GITHUB (200 OK) - SIEMPRE AL FINAL
         self._set_response()
         self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
-
-    def do_GET(self):
-        self._set_response()
-        self.wfile.write(json.dumps({'status': 'running'}).encode('utf-8'))
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -493,3 +503,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
+
