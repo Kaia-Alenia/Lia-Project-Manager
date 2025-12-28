@@ -8,4 +8,5 @@ supabase
 PyGithub
 edge-tts
 pytz
-Pillow  <--- ¡ESTA ES LA NUEVA INDISPENSABLE!
+Pillow
+
