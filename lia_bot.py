@@ -753,8 +753,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         self._set_response()
         self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
+        
 def run_server():
-     port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), WebhookHandler)
     logger.info(f"👂 Webhook activo en puerto {port}")
     server.serve_forever()
@@ -846,6 +847,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
