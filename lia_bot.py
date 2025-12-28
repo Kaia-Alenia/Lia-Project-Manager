@@ -137,35 +137,65 @@ def obtener_metricas_github_real():
         return u.followers, sum([x.stargazers_count for x in r])
     except: return 0, 0
 
+def obtener_estructura_repo():
+    """Genera un mapa visual de carpetas para que Lia no se pierda"""
+    if not repo_obj: return "Repo desconectado."
+    try:
+        # Usamos recursive=True para ver subcarpetas (src, include, etc)
+        sha = repo_obj.get_commits()[0].sha
+        tree = repo_obj.get_git_tree(sha, recursive=True).tree
+        items = []
+        for i in tree:
+            if i.type == "blob": # Solo archivos
+                items.append(i.path)
+        return "\n".join(items)
+    except: return "Error leyendo estructura."
+
+def borrar_archivo_github(path, msg="Lia: Limpieza"):
+    """Permite a Lia borrar archivos basura"""
+    if not repo_obj: return "❌ No Repo"
+    try:
+        c = repo_obj.get_contents(path)
+        repo_obj.delete_file(path, msg, c.sha)
+        return f"🗑️ Borrado: {path}"
+    except Exception as e: return f"⚠️ Error borrando: {e}"
+
 # --- CEREBRO (SISTEMA ANTI-PEREZA) ---
 def cerebro_lia(texto, usuario):
-    if not client: return "⚠️ No tengo cerebro (Falta GROQ_API_KEY)"
+    if not client: return "⚠️ Faltan ojos (GROQ_API_KEY)"
     
+    # 1. Obtenemos contexto fresco
     memoria = leer_memoria_completa()
+    mapa_repo = obtener_estructura_repo() # <--- OJO AQUÍ
     tareas = obtener_tareas_db()
-    lista_tareas = "\n".join([f"{i+1}. {t['descripcion']}" for i, t in enumerate(tareas)]) if tareas else "Al día."
-    repo_name = repo_obj.full_name if repo_obj else "Desconectado"
+    lista_tareas = "\n".join([f"- {t['descripcion']}" for t in tareas]) if tareas else "Sin pendientes."
     
-    # --- REGLAS ESTRICTAS ANTI-PLACEHOLDERS ---
     SYSTEM = f"""
     {memoria}
-    [CONTEXTO] Repo: {repo_name} | Tareas: {lista_tareas}
+    [TU IDENTIDAD]
+    Eres Lia, Desarrolladora Principal de Kaia Alenia (GBA/C Specialist).
+    
+    [ESTRUCTURA ACTUAL DEL REPO - NO INVENTES RUTAS]
+    {mapa_repo}
+    
+    [TAREAS PENDIENTES]
+    {lista_tareas}
     
     {GBA_SPECS}
     
-    [ROL: PRINCIPAL ENGINEER]
-    1. Si te piden código GBA/C, adhiérete ESTRICTAMENTE a las specs de arriba.
-    2. Si el usuario te corrige, analiza el error y arréglalo sin excusas.
-    3. **REGLA SUPREMA: NO USES PLACEHOLDERS.**
-       - NUNCA escribas "// ... resto del código ...".
-       - NUNCA escribas "// Código para restaurar casilla".
-       - SIEMPRE escribe el archivo COMPLETO, línea por línea, función por función.
-       - Si modificas una sola línea, debes reescribir TODO el archivo para que sea válido.
-    
-    4. Para entregar código, usa SIEMPRE:
-       [[FILE: ruta/archivo.ext]]
-       ...CODIGO COMPLETO...
+    [TUS HERRAMIENTAS - ÚSALAS BIEN]
+    1. CREAR/EDITAR:
+       [[FILE: src/main.c]]
+       ... código C puro ...
        [[ENDFILE]]
+    
+    2. BORRAR ARCHIVOS (Si ves basura o duplicados):
+       [[DELETE: carpeta/archivo_viejo.c]]
+       
+    [REGLAS DE ORO]
+    1. **NO MARKDOWN:** Dentro de los bloques [[FILE]], NO pongas ```c ni ```. Solo el código.
+    2. **RUTAS:** Mira el mapa de arriba. Si el makefile dice 'src/', pon los .c en 'src/'.
+    3. **ANTI-PEREZA:** Escribe el archivo COMPLETO. Prohibido usar "// ... resto del código".
     """
     
     try:
@@ -174,15 +204,8 @@ def cerebro_lia(texto, usuario):
             messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto}],
             temperature=0.2 
         ).choices[0].message.content
-        
-        if "[[MEMORIZAR:" in resp:
-            match = re.search(r'\[\[MEMORIZAR: (.*?)\]\]', resp)
-            if match:
-                guardar_aprendizaje(match.group(1))
-                resp = resp.replace(match.group(0), "💾 *[Guardado]*")
-        
         return resp
-    except Exception as e: return f"⚠️ Error: {e}"
+    except Exception as e: return f"⚠️ Error cerebral: {e}"
 
 # --- TTS ---
 async def generar_audio_tts(texto, chat_id, context):
@@ -203,7 +226,7 @@ async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get("https://itch.io/game-assets/free/tag-pixel-art", headers=headers, timeout=10)
+        r = requests.get("[https://itch.io/game-assets/free/tag-pixel-art](https://itch.io/game-assets/free/tag-pixel-art)", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
@@ -213,12 +236,35 @@ async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Asset:** [{title}]({link})", parse_mode="Markdown")
     except: pass
 
+async def rutina_autonoma(context: ContextTypes.DEFAULT_TYPE):
+    """Lia revisa tareas y trabaja sola"""
+    tareas = obtener_tareas_db()
+    if not tareas: return # Nada que hacer
+    
+    tarea = tareas[0] # Toma la primera tarea pendiente
+    
+    # Se auto-invoca
+    prompt_auto = f"MODO AUTÓNOMO. Objetivo: {tarea['descripcion']}. Revisa el código y ejecuta los cambios necesarios."
+    
+    # Usamos un chat_id falso o el tuyo para notificar
+    if MY_CHAT_ID:
+        await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"⚙️ **Trabajando en:** {tarea['descripcion']}...")
+        respuesta = cerebro_lia(prompt_auto, "Auto-System")
+        
+        # Procesamos la respuesta igual que en chat_texto (copia simplificada de la lógica de subida)
+        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
+        for ruta, contenido in archivos:
+            cont_clean = contenido.replace("```", "").strip()
+            subir_archivo_github(ruta.strip(), cont_clean, msg="Avance Autónomo")
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"✅ Auto-Code: {ruta}")
+
 async def post_init(app):
     s = AsyncIOScheduler()
     tz = pytz.timezone('America/Mexico_City')
     s.add_job(rutina_buenos_dias, 'cron', hour=8, minute=0, timezone=tz, args=[app])
     s.add_job(vigilancia_proactiva, 'cron', hour=13, minute=0, timezone=tz, args=[app])
     s.add_job(vigilancia_proactiva, 'cron', hour=19, minute=0, timezone=tz, args=[app])
+    # s.add_job(rutina_autonoma, 'interval', minutes=60, args=[app]) 
     s.start()
     logger.info("⏰ Cronograma OK")
 
@@ -315,24 +361,44 @@ async def recibir_archivo(u, c):
 
 async def chat_texto(u, c):
     await u.message.reply_chat_action("typing")
-    resp = cerebro_lia(u.message.text, u.effective_user.first_name)
+    user_msg = u.message.text
     
-    # --- FILTRO INTELIGENTE DE ARCHIVOS ---
-    acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
-    msgs = []
+    # Pensar
+    resp = cerebro_lia(user_msg, u.effective_user.first_name)
     
-    if acciones:
-        for ruta, contenido in acciones:
-            # 1. LIMPIEZA DE MARKDOWN
-            contenido_limpio = re.sub(r"```[a-z]*", "", contenido).replace("```", "").strip()
-            # 2. Subida a GitHub
-            res = subir_archivo_github(ruta.strip(), contenido_limpio)
-            msgs.append(f"🛠️ {res}")
-            resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"\n*(Code applied to {ruta})*\n")
-            
-    await u.message.reply_text(resp)
-    if msgs: await u.message.reply_text("\n".join(msgs), parse_mode="Markdown")
-    if random.random() < 0.2: await generar_audio_tts(resp[:200], u.effective_chat.id, c)
+    msgs_log = []
+    
+    # 1. DETECTAR BORRADOS [[DELETE: ...]]
+    borrados = re.findall(r"\[\[DELETE:\s*(.*?)\]\]", resp)
+    for ruta in borrados:
+        res = borrar_archivo_github(ruta.strip())
+        msgs_log.append(res)
+
+    # 2. DETECTAR EDICIONES [[FILE: ...]]
+    archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
+    
+    for ruta, contenido in archivos:
+        ruta = ruta.strip()
+        # LIMPIEZA AGRESIVA: Quitamos ```c, ```, y posibles textos basura al inicio
+        contenido_limpio = re.sub(r"^```[a-z]*\s*", "", contenido) 
+        contenido_limpio = contenido_limpio.replace("```", "").strip()
+        
+        # Validar que no sea código vago
+        if "// ..." in contenido_limpio:
+            msgs_log.append(f"⚠️ **RECHAZADO {ruta}**: Lia intentó usar placeholders.")
+            continue
+
+        res = subir_archivo_github(ruta, contenido_limpio, msg=f"Lia Auto: {ruta}")
+        msgs_log.append(f"🛠️ {res}")
+        
+        # Ocultamos el bloque de código gigante del chat para no spamear
+        resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"📄 *[{ruta} procesado]*")
+        resp = resp.replace(f"[[DELETE: {ruta}]]", "")
+
+    # Responder
+    await u.message.reply_text(resp, parse_mode="Markdown")
+    if msgs_log: 
+        await u.message.reply_text("\n".join(msgs_log))
 
 # --- SERVER ---
 class H(BaseHTTPRequestHandler):
