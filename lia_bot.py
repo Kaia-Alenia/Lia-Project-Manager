@@ -7,7 +7,8 @@ import random
 import logging
 import requests
 import re
-import json  # <--- FALTABA ESTO
+import json
+import time
 from datetime import datetime
 import pytz 
 from bs4 import BeautifulSoup
@@ -32,6 +33,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO") or os.getenv("REPO_NAME")
+
+# --- VARIABLE GLOBAL PARA EL LOOP (PUENTE HILOS) ---
+# Esto arregla el error "RuntimeWarning: coroutine was never awaited"
+global_app_loop = None
 
 # --- CLIENTES ---
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
@@ -59,7 +64,7 @@ if GITHUB_TOKEN:
 # --- MEMORIA VOLÁTIL ---
 ultimo_codigo_leido = ""
 
-# --- DOCUMENTACIÓN TÉCNICA (CEREBRO SENIOR + NO LAZY) ---
+# --- DOCUMENTACIÓN TÉCNICA (CEREBRO SENIOR) ---
 GBA_SPECS = """
 [HARDWARE SPECS - GBA BARE METAL]
 1. MEMORY: VRAM=0x06000000 (u16 array), IO=0x04000000.
@@ -81,7 +86,7 @@ GBA_SPECS = """
 3. Si agregas archivos .c nuevos, solo asegúrate de que el Makefile los incluya en la compilación.
 """
 
-# --- FUNCIONES DB ---
+# --- FUNCIONES DB (RESTAURADAS) ---
 def obtener_recuerdos_relevantes(query_usuario):
     identidad = "Eres Lía, Ingeniera de Software Principal en Kaia Alenia."
     recuerdos = ""
@@ -124,7 +129,7 @@ def cerrar_tarea_db(numero):
             return t['descripcion']
     return None
 
-# --- FUNCIONES GITHUB ---
+# --- FUNCIONES GITHUB (RESTAURADAS) ---
 def crear_issue_github(titulo, body, labels=[]):
     if not repo_obj: return None
     try: return repo_obj.create_issue(title=titulo, body=body, labels=labels).html_url
@@ -169,7 +174,7 @@ def borrar_archivo_github(path, msg="Lia: Limpieza"):
         return f"🗑️ Borrado: {path}"
     except Exception as e: return f"⚠️ Error borrando: {e}"
 
-# --- CEREBRO ---
+# --- CEREBRO (FULL) ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ Faltan ojos (GROQ_API_KEY)"
     
@@ -245,6 +250,10 @@ async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
 async def post_init(app):
+    # Guardamos el loop para usarlo desde el servidor HTTP (FIX CRÍTICO)
+    global global_app_loop
+    global_app_loop = asyncio.get_running_loop()
+
     s = AsyncIOScheduler()
     tz = pytz.timezone('America/Mexico_City')
     s.add_job(rutina_buenos_dias, 'cron', hour=8, minute=0, timezone=tz, args=[app])
@@ -253,7 +262,7 @@ async def post_init(app):
     s.start()
     logger.info("⏰ Cronograma OK")
 
-# --- COMANDOS ---
+# --- COMANDOS (RESTAURADOS) ---
 async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt: return await update.message.reply_text("🎨 Uso: `/imagina robot`")
@@ -334,9 +343,112 @@ async def cmd_hecho(u, c):
     if c.args: cerrar_tarea_db(int(c.args[0])); await u.message.reply_text("🔥")
 async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
-    await u.message.reply_text(f"📊 **Lía v7.4 (No Lazy)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
+    await u.message.reply_text(f"📊 **Lía v8.0 (Full + AutoFix)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
-# --- HANDLERS TEXTO ---
+# --- HELPER: ENVIAR MENSAJE DESDE WEBHOOK (NUEVO) ---
+def notificar_telegram(texto):
+    """Envía mensaje a Telegram de forma segura desde otro hilo"""
+    global global_app_loop, MY_CHAT_ID, app
+    
+    if MY_CHAT_ID and global_app_loop and app:
+        try:
+            # Cortar mensaje si es muy largo
+            msg_clean = texto[:3000] + ("..." if len(texto)>3000 else "")
+            
+            # Inyectar la tarea en el loop principal del bot
+            asyncio.run_coroutine_threadsafe(
+                app.bot.send_message(chat_id=MY_CHAT_ID, text=msg_clean, parse_mode="Markdown"),
+                global_app_loop
+            )
+        except Exception as e:
+            logger.error(f"Fallo al notificar Telegram: {e}")
+
+# --- SERVER WEBHOOK & AUTO-FIX (CLASE MEJORADA) ---
+class WebhookHandler(BaseHTTPRequestHandler):
+    def _set_response(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+
+    def procesar_error_github(self, error_log):
+        """Lia lee el error y decide cómo arreglarlo (Versión Blindada)"""
+        logger.info("🚨 ERROR DE COMPILACIÓN RECIBIDO")
+        notificar_telegram(f"🚨 **Alerta de Compilación:**\n`{error_log[:500]}...`\n\n*Lia está pensando...*")
+        
+        prompt_fix = f"""
+        [MODO DEBUGGER: ACTIVADO]
+        Lia, tu último código falló en la compilación.
+        
+        ERRORES REPORTADOS:
+        {error_log}
+        
+        TU TAREA:
+        1. ANALIZA: ¿Es sintaxis, linker o lógica?
+        2. ACCIÓN: Reescribe SOLO el archivo afectado completo y corregido.
+        
+        Responde formato: [[FILE: ...]] código [[ENDFILE]].
+        """
+        
+        respuesta = cerebro_lia(prompt_fix, "Compilador")
+        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
+        
+        fix_log = []
+        for ruta_raw, contenido in archivos:
+            ruta = ruta_raw.strip()
+            if " " in ruta: ruta = ruta.split(" ")[0]
+            ruta = ruta.replace("]", "").replace("[", "")
+            contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
+            
+            if len(contenido_limpio) < 10: continue
+
+            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
+            fix_log.append(res)
+            logger.info(f"✅ Auto-Fix Aplicado: {res}")
+            
+        if fix_log:
+            notificar_telegram("🚑 **Solución Aplicada:**\n" + "\n".join(fix_log) + "\n*Recompilando...*")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def do_POST(self):
+        try:
+            content_length = int(self.headers['Content-Length'])
+            post_bytes = self.rfile.read(content_length)
+            post_str = post_bytes.decode('utf-8')
+            
+            logger.info(f"📩 RECIBIDO: {post_str[:100]}...") 
+
+            # 1. TEXTO PLANO (CURL DEL ACTION)
+            if not post_str.strip().startswith("{"):
+                if "error" in post_str.lower() or "failed" in post_str.lower():
+                    self.procesar_error_github(post_str)
+                elif "exito" in post_str.lower() or "success" in post_str.lower():
+                    notificar_telegram(f"🎉 **Noticia:**\n{post_str}")
+
+            # 2. JSON (WEBHOOK NATIVO)
+            elif post_str.strip().startswith("{"):
+                # Aquí iría lógica extra para JSON nativo si la usas
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error do_POST: {e}")
+
+        self._set_response()
+        self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
+
+    def do_GET(self):
+        self._set_response()
+        self.wfile.write(json.dumps({'status': 'running'}).encode('utf-8'))
+
+def run_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
+    logger.info(f"👂 Webhook activo en puerto {port}")
+    server.serve_forever()
+
+# --- HANDLERS TEXTO (RESTAURADOS) ---
 async def recibir_archivo(u, c):
     if u.message.document.file_size < 1e6:
         f = await c.bot.get_file(u.message.document.file_id)
@@ -357,15 +469,11 @@ async def chat_texto(u, c):
         res = borrar_archivo_github(ruta.strip())
         msgs_log.append(res)
 
-    # 2. Ediciones con Blindaje
+    # 2. Ediciones
     archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
     for ruta_raw, contenido in archivos:
-        ruta = ruta_raw.strip()
-        if " " in ruta: ruta = ruta.split(" ")[0]
-        ruta = ruta.replace("]", "").replace("[", "")
-        
-        contenido_limpio = re.sub(r"^```[a-z]*\s*", "", contenido) 
-        contenido_limpio = contenido_limpio.replace("```", "").strip()
+        ruta = ruta_raw.strip().split(" ")[0].replace("]","").replace("[","")
+        contenido_limpio = re.sub(r"^```[a-z]*\s*", "", contenido).replace("```", "").strip()
         
         if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
              msgs_log.append(f"⚠️ Ignorado {ruta}: Código incompleto.")
@@ -378,118 +486,16 @@ async def chat_texto(u, c):
     await u.message.reply_text(resp, parse_mode="Markdown")
     if msgs_log: await u.message.reply_text("\n".join(msgs_log))
 
-# --- SERVER WEBHOOK & AUTO-FIX (CLASE CORREGIDA Y UNIFICADA) ---
-class WebhookHandler(BaseHTTPRequestHandler):
-    def _set_response(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-
-    def procesar_error_github(self, error_log):
-        """Lia lee el error y decide cómo arreglarlo (Versión Blindada)"""
-        logger.info("🚨 ERROR DE COMPILACIÓN RECIBIDO")
-        
-        prompt_fix = f"""
-        [MODO DEBUGGER: ACTIVADO]
-        Lia, tu último código falló en la compilación. NO ADIVINES.
-        
-        ERRORES REPORTADOS (GCC/MAKE):
-        {error_log}
-        
-        TU TAREA (Sigue este orden estricto):
-        1. ANALIZA: ¿Es un error de sintaxis (falta ;), de linker (falta .o) o de lógica?
-        2. UBICACIÓN: ¿En qué archivo y línea exacta está el fallo?
-        3. ESTRATEGIA: Si el error dice "undefined reference", revisa si incluiste el .h o si falta compilar el .c en el Makefile.
-        4. ACCIÓN: Reescribe SOLO el archivo afectado completo y corregido.
-        
-        [REGLA DE ORO]
-        Si el error es sobre el Makefile, asegúrate de usar TABS reales (\\t), no espacios.
-        
-        Responde con el formato [[FILE: ...]] código [[ENDFILE]].
-        """
-        
-        respuesta = cerebro_lia(prompt_fix, "Compilador")
-        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
-        
-        for ruta_raw, contenido in archivos:
-            ruta = ruta_raw.strip()
-            if " " in ruta: ruta = ruta.split(" ")[0]
-            ruta = ruta.replace("]", "").replace("[", "")
-            
-            contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
-            
-            if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
-                logger.warning(f"⚠️ Auto-Fix Ignorado {ruta}: Código incompleto.")
-                continue
-
-            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
-            logger.info(f"✅ Auto-Fix Aplicado: {res}")
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-    def do_POST(self):
-        # 1. LEER LOS DATOS (BYTES -> STRING)
-        try:
-            content_length = int(self.headers['Content-Length'])
-            post_bytes = self.rfile.read(content_length)
-            post_str = post_bytes.decode('utf-8')
-        except Exception as e:
-            logger.error(f"Error leyendo POST: {e}")
-            return
-
-        # 2. LOGUEAR Y AVISAR A TELEGRAM (Para que tú lo veas)
-        logger.info(f"📩 RECIBIDO DE GITHUB: {post_str[:200]}...") # Logueamos solo el inicio para no saturar
-        
-        if MY_CHAT_ID:
-            # Enviamos el mensaje a Telegram sin bloquear el servidor
-            try:
-                msg_clean = post_str[:3000] # Telegram tiene límite de 4096 chars
-                asyncio.run_coroutine_threadsafe(
-                    app.bot.send_message(chat_id=MY_CHAT_ID, text=f"🔧 **GitHub Dice:**\n`{msg_clean}`", parse_mode="Markdown"),
-                    app.loop
-                )
-            except: pass
-
-        # 3. ANALIZAR SI HAY QUE ARREGLAR CÓDIGO (AUTO-FIX)
-        try:
-            # Parseamos el JSON con seguridad
-            if post_str.strip().startswith("{"):
-                payload = json.loads(post_str)
-                
-                # CASO A: ERROR EN GITHUB ACTIONS (El código está roto)
-                if 'workflow_run' in payload and payload.get('action') == 'completed':
-                    run = payload['workflow_run']
-                    if run.get('conclusion') == 'failure':
-                        logger.info("❌ GitHub Action falló. Disparando Auto-Fix...")
-                        run_id = run['id']
-                        # Como no tenemos el log completo, asumimos que Lia debe revisar sus últimos cambios
-                        # O usamos el mensaje si viene en el body
-                        self.procesar_error_github(f"Fallo crítico en Run ID {run_id}. Revisa main.c y Makefile.")
-
-            # Si no es JSON (es texto plano de curl), ya lo mandamos a Telegram arriba.
-                
-        except Exception as e:
-            logger.error(f"Error procesando lógica JSON: {e}")
-            
-        # 4. RESPONDER A GITHUB (200 OK) - SIEMPRE AL FINAL
-        self._set_response()
-        self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
-    logger.info(f"👂 Webhook activo en puerto {port}")
-    server.serve_forever()
-
-# --- MAIN ---
+# --- MAIN (CON PAUSA ANTI-CONFLICTO) ---
 if __name__ == '__main__':
+    print("⏳ Esperando limpieza de sockets (2s)...")
+    time.sleep(2)
+
     threading.Thread(target=run_server, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     cmds = [
-        ("start", lambda u,c: u.message.reply_text("⚡ Lía v7.4 (No Lazy) Lista.")), 
+        ("start", lambda u,c: u.message.reply_text("⚡ Lía v8.0 (Full) Lista.")), 
         ("status", cmd_status), ("conectar", cmd_conectar),
         ("imagina", cmd_imagina), ("assets", cmd_assets),
         ("arbol", cmd_arbol), ("leer", cmd_leer),
@@ -501,6 +507,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Document.ALL, recibir_archivo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_texto))
     
-    print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
+    print(">>> LÍA v8.0 FULL SYSTEM STARTED <<<")
     app.run_polling()
-
