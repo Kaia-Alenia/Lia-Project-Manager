@@ -432,6 +432,10 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Lia Server Online")
+        
+def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
     def do_POST(self):
         # 1. Recibir el error desde GitHub
@@ -519,3 +523,4 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
+
