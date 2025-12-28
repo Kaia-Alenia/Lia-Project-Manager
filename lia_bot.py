@@ -426,30 +426,11 @@ async def chat_texto(u, c):
     if msgs_log: 
         await u.message.reply_text("\n".join(msgs_log))
 
-# --- SERVIDOR WEBHOOK (OÍDOS DE LIA) ---
 class WebhookHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def _set_response(self):
         self.send_response(200)
+        self.send_header('Content-type', 'application/json')
         self.end_headers()
-        self.wfile.write(b"Lia Server Online")
-        
-def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-    def do_POST(self):
-        # 1. Recibir el error desde GitHub
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length).decode('utf-8')
-        
-        # 2. Responder a GitHub rápido para no dar timeout
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Recibido")
-        
-        # 3. Disparar proceso de corrección en segundo plano
-        # (Importante: Ejecutamos esto asíncronamente para no bloquear el server)
-        threading.Thread(target=self.procesar_error_github, args=(post_data,)).start()
 
     def procesar_error_github(self, error_log):
         """Lia lee el error y decide cómo arreglarlo (Versión Blindada)"""
@@ -474,6 +455,91 @@ def do_HEAD(self):
         
         Responde con el formato [[FILE: ...]] código [[ENDFILE]].
         """
+        
+        # Lia piensa
+        respuesta = cerebro_lia(prompt_fix, "Compilador")
+        
+        # Lia actúa (CON BLINDAJE DE RUTAS)
+        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
+        
+        for ruta_raw, contenido in archivos:
+            # --- BLINDAJE ---
+            ruta = ruta_raw.strip()
+            if " " in ruta: ruta = ruta.split(" ")[0]
+            ruta = ruta.replace("]", "").replace("[", "")
+            
+            contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
+            
+            if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
+                logger.warning(f"⚠️ Auto-Fix Ignorado {ruta}: Código incompleto.")
+                continue
+
+            # Subir y Loguear (No hay chat aquí)
+            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
+            logger.info(f"✅ Auto-Fix Aplicado: {res}")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def do_POST(self):
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
+        
+        try:
+            payload = json.loads(post_data.decode('utf-8'))
+            
+            # VERIFICAR SI ES DE GITHUB ACTIONS (WORKFLOW_RUN)
+            if 'workflow_run' in payload and payload.get('action') == 'completed':
+                run = payload['workflow_run']
+                conclusion = run.get('conclusion')
+                
+                if conclusion == 'failure':
+                    logger.info("❌ GitHub Action falló. Analizando logs...")
+                    logs_url = run.get('logs_url') # Esto suele requerir auth extra o descargar zip
+                    # Truco: Usar el head_commit message o jobs url para sacar info basica
+                    # Por simplicidad v1: Asumimos error genérico o intentamos leer jobs
+                    repo_full_name = payload['repository']['full_name']
+                    run_id = run['id']
+                    
+                    # Intentamos obtener el log del job fallido
+                    try:
+                        g = Github(GITHUB_TOKEN)
+                        repo = g.get_repo(repo_full_name)
+                        workflow_run = repo.get_workflow_run(run_id)
+                        
+                        log_text = ""
+                        for job in workflow_run.jobs():
+                            if job.conclusion == 'failure':
+                                log_text += f"Job: {job.name}\nSteps failed.\n"
+                                # Github API no da logs de texto plano facil sin descargar zip
+                                # Simularemos un error genérico o usaremos anotaciones si hay
+                                log_text += "Error de compilación detectado en GBA.\n"
+                        
+                        # Disparar Auto-Fix
+                        self.procesar_error_github(log_text)
+                        
+                    except Exception as e:
+                        logger.error(f"Error leyendo GitHub logs: {e}")
+
+                elif conclusion == 'success':
+                    logger.info("✅ GitHub Action exitoso.")
+                    # Opcional: Avisar por telegram
+            
+            # MENSAJE DE TELEGRAM
+            elif 'message' in payload:
+                update = Update.de_json(payload, app.bot)
+                app.process_update(update)
+                
+        except Exception as e:
+            logger.error(f"Error procesando POST: {e}")
+            
+        self._set_response()
+        self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
+
+    def do_GET(self):
+        self._set_response()
+        self.wfile.write(json.dumps({'status': 'running'}).encode('utf-8'))
         
         # Lia piensa
         respuesta = cerebro_lia(prompt_fix, "Compilador")
@@ -523,4 +589,5 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
+
 
