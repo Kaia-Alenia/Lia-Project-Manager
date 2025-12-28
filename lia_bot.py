@@ -567,7 +567,7 @@ def notificar_telegram(texto):
         except Exception as e:
             logger.error(f"Fallo al notificar Telegram: {e}")
 
-# --- SERVER WEBHOOK & AUTO-FIX (CEREBRO CONTEXTUAL) ---
+# --- SERVER WEBHOOK & AUTO-FIX (CEREBRO CONTEXTUAL + WEB VISUAL) ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def _set_response(self):
         self.send_response(200)
@@ -650,10 +650,87 @@ class WebhookHandler(BaseHTTPRequestHandler):
         if fix_log:
             notificar_telegram("✅ **Corrección Aplicada:**\n" + "\n".join(fix_log) + "\n*Respetando lógica original. Recompilando...*")
 
+    # --- PING DE VIDA (HEAD) ---
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
 
+    # --- LA PARTE VISUAL NUEVA (GET) ---
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.end_headers()
+        
+        # Diseño Cyberpunk/Hacker para la web
+        html = """
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Lia Status</title>
+            <style>
+                body {
+                    background-color: #0d1117;
+                    color: #e6edf3;
+                    font-family: 'Courier New', monospace;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                }
+                .container {
+                    text-align: center;
+                    border: 1px solid #30363d;
+                    padding: 40px;
+                    border-radius: 12px;
+                    background: #161b22;
+                    box-shadow: 0 0 20px rgba(0, 255, 170, 0.1);
+                }
+                h1 { font-size: 3rem; margin: 0; letter-spacing: -2px; }
+                .status { 
+                    color: #2ea043; 
+                    font-weight: bold; 
+                    margin-top: 10px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 10px;
+                }
+                .blink {
+                    width: 12px;
+                    height: 12px;
+                    background-color: #2ea043;
+                    border-radius: 50%;
+                    box-shadow: 0 0 10px #2ea043;
+                    animation: pulse 2s infinite;
+                }
+                @keyframes pulse {
+                    0% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.5; transform: scale(0.8); }
+                    100% { opacity: 1; transform: scale(1); }
+                }
+                p.info { color: #8b949e; font-size: 0.9rem; margin-top: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>LIA v8.0</h1>
+                <div class="status">
+                    <div class="blink"></div>
+                    SYSTEM ONLINE
+                </div>
+                <p class="info">GitHub Integration • Auto-Fix • AI Assistant</p>
+                <p class="info" style="font-size: 0.7rem;">Running on Render Cloud</p>
+            </div>
+        </body>
+        </html>
+        """
+        self.wfile.write(html.encode('utf-8'))
+
+    # --- LA PARTE FUNCIONAL ORIGINAL (POST) ---
     def do_POST(self):
         try:
             content_length = int(self.headers['Content-Length'])
@@ -676,12 +753,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         self._set_response()
         self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), WebhookHandler)
-    logger.info(f"👂 Webhook activo en puerto {port}")
-    server.serve_forever()
 
 # --- HANDLERS TEXTO (RESTAURADOS) ---
 async def recibir_archivo(u, c):
@@ -770,3 +841,4 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
