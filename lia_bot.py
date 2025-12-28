@@ -73,6 +73,11 @@ GBA_SPECS = """
    - NO printf, malloc, rand(), time(), SetPixel(), RGB().
    - Use custom LCG for random. Write directly to VRAM.
    - FORMAT: Inside [[FILE]] blocks, DO NOT use markdown ticks (```). Write RAW code only.
+
+[REGLAS DE COMPILACIÓN - NO TOCAR EL MAKEFILE]
+1. El Makefile YA EXISTE y es perfecto. NO LO EDITES a menos que agregues nuevos archivos .c.
+2. NUNCA uses 'gcc' a secas. La compilación GBA requiere 'arm-none-eabi-gcc'.
+3. Si agregas archivos .c nuevos, solo asegúrate de que el Makefile los incluya en la compilación.
 """
 
 # --- FUNCIONES DB ---
@@ -391,26 +396,30 @@ async def chat_texto(u, c):
         res = borrar_archivo_github(ruta.strip())
         msgs_log.append(res)
 
-    # 2. DETECTAR EDICIONES [[FILE: ...]]
+    # 2. DETECTAR EDICIONES [[FILE: ...]] CON BLINDAJE
     archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
     
-    for ruta, contenido in archivos:
-        ruta = ruta.strip()
-        # LIMPIEZA AGRESIVA: Quitamos ```c, ```, y posibles textos basura al inicio
+    for ruta_raw, contenido in archivos:
+        # --- BLINDAJE DE RUTA ---
+        ruta = ruta_raw.strip()
+        if " " in ruta: ruta = ruta.split(" ")[0] # Quita texto basura tras el nombre
+        ruta = ruta.replace("]", "").replace("[", "") # Limpieza extra
+        
+        # --- LIMPIEZA DE CONTENIDO ---
         contenido_limpio = re.sub(r"^```[a-z]*\s*", "", contenido) 
         contenido_limpio = contenido_limpio.replace("```", "").strip()
         
-        # Validar que no sea código vago
-        if "// ..." in contenido_limpio:
-            msgs_log.append(f"⚠️ **RECHAZADO {ruta}**: Lia intentó usar placeholders.")
-            continue
+        # Evitar subir código vacío o placeholders
+        if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
+             msgs_log.append(f"⚠️ Ignorado {ruta}: Código incompleto.")
+             continue
 
+        # Subir a GitHub
         res = subir_archivo_github(ruta, contenido_limpio, msg=f"Lia Auto: {ruta}")
         msgs_log.append(f"🛠️ {res}")
         
-        # Ocultamos el bloque de código gigante del chat para no spamear
-        resp = resp.replace(f"[[FILE: {ruta}]]\n{contenido}\n[[ENDFILE]]", f"📄 *[{ruta} procesado]*")
-        resp = resp.replace(f"[[DELETE: {ruta}]]", "")
+        # Ocultamos el bloque de código gigante del chat
+        resp = resp.replace(f"[[FILE: {ruta_raw}]]\n{contenido}\n[[ENDFILE]]", f"📄 *[{ruta} procesado]*")
 
     # Responder
     await u.message.reply_text(resp, parse_mode="Markdown")
@@ -419,11 +428,6 @@ async def chat_texto(u, c):
 
 # --- SERVIDOR WEBHOOK (OÍDOS DE LIA) ---
 class WebhookHandler(BaseHTTPRequestHandler):
-    # ESTO ES LO NUEVO QUE NECESITAS AGREGAR:
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
@@ -444,31 +448,50 @@ class WebhookHandler(BaseHTTPRequestHandler):
         threading.Thread(target=self.procesar_error_github, args=(post_data,)).start()
 
     def procesar_error_github(self, error_log):
-        """Lia lee el error y decide cómo arreglarlo"""
+        """Lia lee el error y decide cómo arreglarlo (Versión Blindada)"""
         logger.info("🚨 ERROR DE COMPILACIÓN RECIBIDO")
         
-        # Inyectamos el error en el cerebro de Lia
+        # --- NUEVO PROMPT MEJORADO ---
         prompt_fix = f"""
-        [SISTEMA DE ALERTA CRÍTICA: FALLO DE COMPILACIÓN]
-        Lia, el código que subiste rompió el build.
+        [MODO DEBUGGER: ACTIVADO]
+        Lia, tu último código falló en la compilación. NO ADIVINES.
         
-        LOG DEL ERROR (GCC):
+        ERRORES REPORTADOS (GCC/MAKE):
         {error_log}
         
-        TU MISIÓN:
-        1. Analiza el error (línea, archivo, tipo de error).
-        2. Revisa tu memoria de la estructura de archivos.
-        3. Genera el código corregido usando [[FILE: ...]].
+        TU TAREA (Sigue este orden estricto):
+        1. ANALIZA: ¿Es un error de sintaxis (falta ;), de linker (falta .o) o de lógica?
+        2. UBICACIÓN: ¿En qué archivo y línea exacta está el fallo?
+        3. ESTRATEGIA: Si el error dice "undefined reference", revisa si incluiste el .h o si falta compilar el .c en el Makefile.
+        4. ACCIÓN: Reescribe SOLO el archivo afectado completo y corregido.
+        
+        [REGLA DE ORO]
+        Si el error es sobre el Makefile, asegúrate de usar TABS reales (\\t), no espacios.
+        
+        Responde con el formato [[FILE: ...]] código [[ENDFILE]].
         """
         
         # Lia piensa
         respuesta = cerebro_lia(prompt_fix, "Compilador")
         
-        # Lia actúa (Reutilizamos lógica de chat_texto simplificada)
-        acciones = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
-        for ruta, contenido in acciones:
+        # Lia actúa (CON BLINDAJE DE RUTAS)
+        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
+        
+        for ruta_raw, contenido in archivos:
+            # --- BLINDAJE ---
+            ruta = ruta_raw.strip()
+            if " " in ruta: ruta = ruta.split(" ")[0]
+            ruta = ruta.replace("]", "").replace("[", "")
+            
             contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
-            subir_archivo_github(ruta.strip(), contenido_limpio, msg="🚑 Hotfix por Compilador")
+            
+            if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
+                logger.warning(f"⚠️ Auto-Fix Ignorado {ruta}: Código incompleto.")
+                continue
+
+            # Subir y Loguear (No hay chat aquí)
+            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
+            logger.info(f"✅ Auto-Fix Aplicado: {res}")
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -496,4 +519,3 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
-
