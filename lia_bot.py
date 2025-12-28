@@ -7,6 +7,7 @@ import random
 import logging
 import requests
 import re
+import json  # <--- FALTABA ESTO
 from datetime import datetime
 import pytz 
 from bs4 import BeautifulSoup
@@ -82,30 +83,20 @@ GBA_SPECS = """
 
 # --- FUNCIONES DB ---
 def obtener_recuerdos_relevantes(query_usuario):
-    """Busca solo lo necesario en la DB para no saturar a Lia"""
     identidad = "Eres Lía, Ingeniera de Software Principal en Kaia Alenia."
-    
     recuerdos = ""
     if supabase:
         try:
-            # Extraemos palabras clave simples del usuario para la búsqueda
             palabras_clave = " ".join([w for w in query_usuario.split() if len(w) > 4]) or "general"
-            
-            # Intentamos usar RPC (asumiendo que existe la función 'buscar_recuerdos' en Supabase)
             try:
                 res = supabase.rpc("buscar_recuerdos", {"query_text": palabras_clave}).execute()
-                if res.data:
-                    recuerdos = "\n".join([f"- {r['contenido']}" for r in res.data])
+                if res.data: recuerdos = "\n".join([f"- {r['contenido']}" for r in res.data])
             except:
-                res = None # Si falla RPC, pasamos al fallback
-
+                res = None
             if not recuerdos:
-                # Fallback: Si no hay matches o RPC falla, traer los últimos 3 recuerdos generales
                 res = supabase.table("memoria").select("contenido").order("created_at", desc=True).limit(3).execute()
-                if res.data:
-                    recuerdos = "\n".join([f"- {r['contenido']}" for r in res.data])
+                if res.data: recuerdos = "\n".join([f"- {r['contenido']}" for r in res.data])
         except Exception as e: logger.error(f"Error Memoria: {e}")
-        
     return f"{identidad}\n\n[MEMORIA RELEVANTE]:\n{recuerdos}"
 
 def guardar_aprendizaje(dato):
@@ -160,21 +151,17 @@ def obtener_metricas_github_real():
     except: return 0, 0
 
 def obtener_estructura_repo():
-    """Genera un mapa visual de carpetas para que Lia no se pierda"""
     if not repo_obj: return "Repo desconectado."
     try:
-        # Usamos recursive=True para ver subcarpetas (src, include, etc)
         sha = repo_obj.get_commits()[0].sha
         tree = repo_obj.get_git_tree(sha, recursive=True).tree
         items = []
         for i in tree:
-            if i.type == "blob": # Solo archivos
-                items.append(i.path)
+            if i.type == "blob": items.append(i.path)
         return "\n".join(items)
     except: return "Error leyendo estructura."
 
 def borrar_archivo_github(path, msg="Lia: Limpieza"):
-    """Permite a Lia borrar archivos basura"""
     if not repo_obj: return "❌ No Repo"
     try:
         c = repo_obj.get_contents(path)
@@ -182,11 +169,10 @@ def borrar_archivo_github(path, msg="Lia: Limpieza"):
         return f"🗑️ Borrado: {path}"
     except Exception as e: return f"⚠️ Error borrando: {e}"
 
-# --- CEREBRO (SISTEMA ANTI-PEREZA) ---
+# --- CEREBRO ---
 def cerebro_lia(texto, usuario):
     if not client: return "⚠️ Faltan ojos (GROQ_API_KEY)"
     
-    # 1. Obtenemos contexto fresco y relevante
     memoria = obtener_recuerdos_relevantes(texto)
     mapa_repo = obtener_estructura_repo()
     tareas = obtener_tareas_db()
@@ -211,7 +197,7 @@ def cerebro_lia(texto, usuario):
        ... código C puro ...
        [[ENDFILE]]
     
-    2. BORRAR ARCHIVOS (Si ves basura o duplicados):
+    2. BORRAR ARCHIVOS:
        [[DELETE: carpeta/archivo_viejo.c]]
        
     [REGLAS DE ORO]
@@ -241,7 +227,7 @@ async def generar_audio_tts(texto, chat_id, context):
 # --- RUTINAS ---
 async def rutina_buenos_dias(context: ContextTypes.DEFAULT_TYPE):
     if not MY_CHAT_ID: return
-    frases = ["¡Buenos días, Jefe! Sistemas listos.", "Arriba. Hay código que optimizar.", "Compilador en espera. ¿Qué hacemos?"]
+    frases = ["¡Buenos días! Sistemas listos.", "Arriba. Hay código que optimizar.", "Compilador en espera."]
     await context.bot.send_message(chat_id=MY_CHAT_ID, text=random.choice(frases))
 
 async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
@@ -258,35 +244,12 @@ async def vigilancia_proactiva(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🎁 **Asset:** [{title}]({link})", parse_mode="Markdown")
     except: pass
 
-async def rutina_autonoma(context: ContextTypes.DEFAULT_TYPE):
-    """Lia revisa tareas y trabaja sola"""
-    tareas = obtener_tareas_db()
-    if not tareas: return # Nada que hacer
-    
-    tarea = tareas[0] # Toma la primera tarea pendiente
-    
-    # Se auto-invoca
-    prompt_auto = f"MODO AUTÓNOMO. Objetivo: {tarea['descripcion']}. Revisa el código y ejecuta los cambios necesarios."
-    
-    # Usamos un chat_id falso o el tuyo para notificar
-    if MY_CHAT_ID:
-        await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"⚙️ **Trabajando en:** {tarea['descripcion']}...")
-        respuesta = cerebro_lia(prompt_auto, "Auto-System")
-        
-        # Procesamos la respuesta igual que en chat_texto (copia simplificada de la lógica de subida)
-        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
-        for ruta, contenido in archivos:
-            cont_clean = contenido.replace("```", "").strip()
-            subir_archivo_github(ruta.strip(), cont_clean, msg="Avance Autónomo")
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"✅ Auto-Code: {ruta}")
-
 async def post_init(app):
     s = AsyncIOScheduler()
     tz = pytz.timezone('America/Mexico_City')
     s.add_job(rutina_buenos_dias, 'cron', hour=8, minute=0, timezone=tz, args=[app])
     s.add_job(vigilancia_proactiva, 'cron', hour=13, minute=0, timezone=tz, args=[app])
     s.add_job(vigilancia_proactiva, 'cron', hour=19, minute=0, timezone=tz, args=[app])
-    # s.add_job(rutina_autonoma, 'interval', minutes=60, args=[app]) 
     s.start()
     logger.info("⏰ Cronograma OK")
 
@@ -296,7 +259,7 @@ async def cmd_imagina(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt: return await update.message.reply_text("🎨 Uso: `/imagina robot`")
     msg = await update.message.reply_text(f"🎨 Imaginando '{prompt}'...")
     seed = random.randint(1, 1e6)
-    url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ','%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){prompt.replace(' ','%20')}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
         r = requests.get(url, timeout=20)
         if r.status_code == 200: await update.message.reply_photo(photo=r.content); await msg.delete()
@@ -308,7 +271,7 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_chat_action("typing")
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(f"https://itch.io/game-assets/free/tag-{tag}", headers=headers, timeout=10)
+        r = requests.get(f"[https://itch.io/game-assets/free/tag-](https://itch.io/game-assets/free/tag-){tag}", headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         games = soup.find_all('div', class_='game_cell')
         if games:
@@ -373,7 +336,7 @@ async def cmd_status(u, c):
     f, s = obtener_metricas_github_real()
     await u.message.reply_text(f"📊 **Lía v7.4 (No Lazy)**\nDB: {bool(supabase)}\nRepo: {repo_obj.full_name if repo_obj else 'No'}\nStars: {s}")
 
-# --- HANDLERS TEXTO (CON FILTRO ANTI-BASURA) ---
+# --- HANDLERS TEXTO ---
 async def recibir_archivo(u, c):
     if u.message.document.file_size < 1e6:
         f = await c.bot.get_file(u.message.document.file_id)
@@ -385,47 +348,37 @@ async def chat_texto(u, c):
     await u.message.reply_chat_action("typing")
     user_msg = u.message.text
     
-    # Pensar
     resp = cerebro_lia(user_msg, u.effective_user.first_name)
-    
     msgs_log = []
     
-    # 1. DETECTAR BORRADOS [[DELETE: ...]]
+    # 1. Borrados
     borrados = re.findall(r"\[\[DELETE:\s*(.*?)\]\]", resp)
     for ruta in borrados:
         res = borrar_archivo_github(ruta.strip())
         msgs_log.append(res)
 
-    # 2. DETECTAR EDICIONES [[FILE: ...]] CON BLINDAJE
+    # 2. Ediciones con Blindaje
     archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", resp, re.DOTALL)
-    
     for ruta_raw, contenido in archivos:
-        # --- BLINDAJE DE RUTA ---
         ruta = ruta_raw.strip()
-        if " " in ruta: ruta = ruta.split(" ")[0] # Quita texto basura tras el nombre
-        ruta = ruta.replace("]", "").replace("[", "") # Limpieza extra
+        if " " in ruta: ruta = ruta.split(" ")[0]
+        ruta = ruta.replace("]", "").replace("[", "")
         
-        # --- LIMPIEZA DE CONTENIDO ---
         contenido_limpio = re.sub(r"^```[a-z]*\s*", "", contenido) 
         contenido_limpio = contenido_limpio.replace("```", "").strip()
         
-        # Evitar subir código vacío o placeholders
         if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
              msgs_log.append(f"⚠️ Ignorado {ruta}: Código incompleto.")
              continue
 
-        # Subir a GitHub
         res = subir_archivo_github(ruta, contenido_limpio, msg=f"Lia Auto: {ruta}")
         msgs_log.append(f"🛠️ {res}")
-        
-        # Ocultamos el bloque de código gigante del chat
         resp = resp.replace(f"[[FILE: {ruta_raw}]]\n{contenido}\n[[ENDFILE]]", f"📄 *[{ruta} procesado]*")
 
-    # Responder
     await u.message.reply_text(resp, parse_mode="Markdown")
-    if msgs_log: 
-        await u.message.reply_text("\n".join(msgs_log))
+    if msgs_log: await u.message.reply_text("\n".join(msgs_log))
 
+# --- SERVER WEBHOOK & AUTO-FIX (CLASE CORREGIDA) ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def _set_response(self):
         self.send_response(200)
@@ -436,7 +389,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
         """Lia lee el error y decide cómo arreglarlo (Versión Blindada)"""
         logger.info("🚨 ERROR DE COMPILACIÓN RECIBIDO")
         
-        # --- NUEVO PROMPT MEJORADO ---
         prompt_fix = f"""
         [MODO DEBUGGER: ACTIVADO]
         Lia, tu último código falló en la compilación. NO ADIVINES.
@@ -456,14 +408,10 @@ class WebhookHandler(BaseHTTPRequestHandler):
         Responde con el formato [[FILE: ...]] código [[ENDFILE]].
         """
         
-        # Lia piensa
         respuesta = cerebro_lia(prompt_fix, "Compilador")
-        
-        # Lia actúa (CON BLINDAJE DE RUTAS)
         archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
         
         for ruta_raw, contenido in archivos:
-            # --- BLINDAJE ---
             ruta = ruta_raw.strip()
             if " " in ruta: ruta = ruta.split(" ")[0]
             ruta = ruta.replace("]", "").replace("[", "")
@@ -474,7 +422,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 logger.warning(f"⚠️ Auto-Fix Ignorado {ruta}: Código incompleto.")
                 continue
 
-            # Subir y Loguear (No hay chat aquí)
             res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
             logger.info(f"✅ Auto-Fix Aplicado: {res}")
 
@@ -489,47 +436,26 @@ class WebhookHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(post_data.decode('utf-8'))
             
-            # VERIFICAR SI ES DE GITHUB ACTIONS (WORKFLOW_RUN)
+            # GITHUB ACTION ERROR
             if 'workflow_run' in payload and payload.get('action') == 'completed':
                 run = payload['workflow_run']
-                conclusion = run.get('conclusion')
-                
-                if conclusion == 'failure':
-                    logger.info("❌ GitHub Action falló. Analizando logs...")
-                    logs_url = run.get('logs_url') # Esto suele requerir auth extra o descargar zip
-                    # Truco: Usar el head_commit message o jobs url para sacar info basica
-                    # Por simplicidad v1: Asumimos error genérico o intentamos leer jobs
-                    repo_full_name = payload['repository']['full_name']
-                    run_id = run['id']
-                    
-                    # Intentamos obtener el log del job fallido
+                if run.get('conclusion') == 'failure':
+                    logger.info("❌ GitHub Action falló. Intentando leer logs...")
+                    # Truco: Si no podemos bajar logs complejos, usamos el mensaje de error si está disponible
+                    # O disparamos una revisión general
                     try:
-                        g = Github(GITHUB_TOKEN)
-                        repo = g.get_repo(repo_full_name)
-                        workflow_run = repo.get_workflow_run(run_id)
-                        
-                        log_text = ""
-                        for job in workflow_run.jobs():
-                            if job.conclusion == 'failure':
-                                log_text += f"Job: {job.name}\nSteps failed.\n"
-                                # Github API no da logs de texto plano facil sin descargar zip
-                                # Simularemos un error genérico o usaremos anotaciones si hay
-                                log_text += "Error de compilación detectado en GBA.\n"
-                        
-                        # Disparar Auto-Fix
+                        repo_full_name = payload['repository']['full_name']
+                        run_id = run['id']
+                        # Simulamos leer el log del job (simplificado)
+                        log_text = f"Fallo en run {run_id}. Revisa main.c y Makefile."
                         self.procesar_error_github(log_text)
-                        
                     except Exception as e:
                         logger.error(f"Error leyendo GitHub logs: {e}")
 
-                elif conclusion == 'success':
-                    logger.info("✅ GitHub Action exitoso.")
-                    # Opcional: Avisar por telegram
-            
-            # MENSAJE DE TELEGRAM
+            # TELEGRAM UPDATE (Solo si usas webhooks, pero no molesta)
             elif 'message' in payload:
-                update = Update.de_json(payload, app.bot)
-                app.process_update(update)
+                # Nota: Si usas polling, esto no se ejecutará normalmente, pero no rompe nada.
+                pass
                 
         except Exception as e:
             logger.error(f"Error procesando POST: {e}")
@@ -540,28 +466,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self._set_response()
         self.wfile.write(json.dumps({'status': 'running'}).encode('utf-8'))
-        
-        # Lia piensa
-        respuesta = cerebro_lia(prompt_fix, "Compilador")
-        
-        # Lia actúa (CON BLINDAJE DE RUTAS)
-        archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
-        
-        for ruta_raw, contenido in archivos:
-            # --- BLINDAJE ---
-            ruta = ruta_raw.strip()
-            if " " in ruta: ruta = ruta.split(" ")[0]
-            ruta = ruta.replace("]", "").replace("[", "")
-            
-            contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
-            
-            if len(contenido_limpio) < 10 or "// ..." in contenido_limpio:
-                logger.warning(f"⚠️ Auto-Fix Ignorado {ruta}: Código incompleto.")
-                continue
-
-            # Subir y Loguear (No hay chat aquí)
-            res = subir_archivo_github(ruta, contenido_limpio, msg="🚑 Hotfix por Compilador")
-            logger.info(f"✅ Auto-Fix Aplicado: {res}")
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -589,5 +493,3 @@ if __name__ == '__main__':
     
     print(">>> LÍA v7.4 NO LAZY SYSTEM STARTED <<<")
     app.run_polling()
-
-
