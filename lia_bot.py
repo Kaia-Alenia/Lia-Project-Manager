@@ -28,7 +28,10 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- ENV ---
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# --- CLIENTES ---
+# URL de tu cerebro en Google Colab (vía Ngrok)
+OLLAMA_URL = "https://lightless-sima-sparsely.ngrok-free.dev"
+client = None # Mantenemos la variable en None para no romper otras verificaciones viejas
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.getenv("MY_CHAT_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -228,9 +231,8 @@ def convertir_imagen_a_gba(image_bytes, nombre="sprite"):
     
     return c_code, h_code, w, h
     
-# --- CEREBRO (FULL) ---
 def cerebro_lia(texto, usuario):
-    if not client: return "⚠️ Faltan ojos (GROQ_API_KEY)"
+    if not OLLAMA_URL: return "⚠️ Faltan ojos (OLLAMA_URL no configurada)"
     
     memoria = obtener_recuerdos_relevantes(texto)
     mapa_repo = obtener_estructura_repo()
@@ -266,13 +268,26 @@ def cerebro_lia(texto, usuario):
     """
     
     try:
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": texto}],
-            temperature=0.2 
-        ).choices[0].message.content
-        return resp
-    except Exception as e: return f"⚠️ Error cerebral: {e}"
+        # CONEXIÓN NEURAL CON GOOGLE COLAB
+        payload = {
+            "model": "llama3",
+            "messages": [
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": texto}
+            ],
+            "stream": False,
+            "options": {"temperature": 0.2, "num_ctx": 4096} # Contexto ampliado
+        }
+        
+        # Enviamos la petición POST a tu Ngrok
+        response = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=120)
+        
+        if response.status_code == 200:
+            return response.json()['message']['content']
+        else:
+            return f"⚠️ Error del Cerebro ({response.status_code}): {response.text}"
+            
+    except Exception as e: return f"⚠️ Error de Conexión Neural: {e}"
 
 # --- TTS ---
 async def generar_audio_tts(texto, chat_id, context):
@@ -976,6 +991,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
