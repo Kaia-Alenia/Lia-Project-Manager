@@ -376,7 +376,8 @@ async def cmd_leer(u, c):
     if not c.args: return await u.message.reply_text("Uso: /leer archivo")
     if not repo_obj: return await u.message.reply_text("❌ Sin Repo")
     try:
-        code = repo_obj.get_contents(c.args[0]).decoded_content.decode()
+        archivo = c.args[0].strip() # Quita espacios extra # Intenta leer explícitamente, incluso si empieza con punto 
+        code = repo_obj.get_contents(archivo).decoded_content.decode()
         global ultimo_codigo_leido; ultimo_codigo_leido = code
         await u.message.reply_text(f"📄 **{c.args[0]}**:\n```\n{code[:3000]}\n```", parse_mode="Markdown")
     except Exception as e: await u.message.reply_text(f"⚠️ {e}")
@@ -392,46 +393,67 @@ async def cmd_run(u, c):
 async def cmd_codear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     peticion = " ".join(context.args)
     if not peticion:
-        await update.message.reply_text("❌ Uso: `/codear haz que el fondo sea verde`")
+        await update.message.reply_text("❌ Uso: `/codear cambia el fondo a rojo`")
         return
 
-    # 1. Avisar que Lía está pensando
-    msg_espera = await update.message.reply_text("🧠 *Lía está programando...*")
+    msg_espera = await update.message.reply_text("🧠 *Lía está leyendo el código actual y pensando...*")
 
-    # 2. Obtener lista de archivos para que sepa dónde está parada
+    # 1. Identificar archivo objetivo (Default: src/main.c)
+    archivo_target = "src/main.c"
+    archivos_en_repo = []
+    
     try:
         contents = repo_obj.get_contents("")
-        archivos_en_repo = [f.path for f in contents if f.type == "file"]
+        while contents:
+            file_content = contents.pop(0)
+            if file_content.type == "dir":
+                contents.extend(repo_obj.get_contents(file_content.path))
+            else:
+                archivos_en_repo.append(file_content.path)
+                # Si el usuario mencionó un archivo específico, lo usamos
+                if file_content.path in peticion:
+                    archivo_target = file_content.path
     except:
-        archivos_en_repo = ["src/main.c"]
+        pass
 
-    # 3. Prompt para la IA (Aquí es donde ocurre la magia)
+    # 2. LEER CÓDIGO ACTUAL (CRÍTICO PARA EVITAR PANTALLA BLANCA)
+    codigo_actual_contexto = ""
+    try:
+        file_obj = repo_obj.get_contents(archivo_target)
+        codigo_actual_contexto = file_obj.decoded_content.decode()
+    except:
+        codigo_actual_contexto = "// No se pudo leer el archivo actual o no existe."
+
+    # 3. Prompt Quirúrgico con Contexto
     prompt = f"""
-    [MODO: SENIOR DEVELOPER GBA]
-    Eres un programador experto en C para Game Boy Advance.
-    Tu misión es modificar o crear código basado en la petición del usuario.
+    [MODO: SENIOR DEVELOPER GBA - EDICIÓN QUIRÚRGICA]
+    Tu misión es modificar el código existente según la petición, SIN ROMPER la lógica actual.
     
-    [PROYECTO ACTUAL]
-    Archivos disponibles: {archivos_en_repo}
+    [ARCHIVO OBJETIVO]
+    {archivo_target}
+
+    [CÓDIGO ACTUAL (NO LO BORRES, SOLO EDÍTALO)]
+    ```c
+    {codigo_actual_contexto}
+    ```
+    
+    [PETICIÓN DEL USUARIO]
+    {peticion}
     
     [REGLAS]
-    1. Si la petición implica modificar algo existente, busca el archivo correcto (ej: src/main.c).
-    2. Responde ÚNICAMENTE en este formato: [[FILE: ruta/archivo.c]] codigo [[ENDFILE]].
-    3. NO incluyas explicaciones fuera del formato.
-    4. Usa lógica real de GBA (registros, modo 3, etc.).
-    
-    Petición: {peticion}
+    1. Mantén los registros de hardware (REG_DISPCNT, VRAM) tal como están si funcionan.
+    2. Si añades sprites o lógica, intégralos en el `main` existente.
+    3. Responde ÚNICAMENTE: [[FILE: {archivo_target}]] código completo [[ENDFILE]].
     """
 
     # 4. Llamar al cerebro
     respuesta = cerebro_lia(prompt, "Senior Dev")
 
-    # 5. Procesar la respuesta y subir a GitHub
+    # 5. Procesar respuesta (El backup se hace automáticamente dentro de subir_archivo_github)
     archivos = re.findall(r"\[\[FILE:\s*(.*?)\]\]\s*\n(.*?)\s*\[\[ENDFILE\]\]", respuesta, re.DOTALL)
     
     if not archivos:
-        # Si la IA no usó el formato, intentamos una última vez con el texto plano
-        await update.message.reply_text("⚠️ No pude formatear el código. Prueba ser más específico.")
+        await msg_espera.edit_text("⚠️ La IA no devolvió el formato correcto. Intenta ser más específico.")
         return
 
     res_final = []
@@ -439,9 +461,10 @@ async def cmd_codear(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ruta = ruta_raw.strip()
         contenido_limpio = contenido.replace("```c", "").replace("```", "").strip()
         
-        # Subir a GitHub
-        resultado = subir_archivo_github(ruta, contenido_limpio, msg="🚀 Update por Lía")
-        res_final.append(f"✅ `{ruta}`")
+        # subir_archivo_github YA TIENE lógica de backup interna.
+        # Al enviarle el contenido nuevo, moverá el viejo a backups/ automáticamente.
+        resultado = subir_archivo_github(ruta, contenido_limpio, msg=f"🤖 IA: {peticion}")
+        res_final.append(f"✅ {resultado}")
 
     await msg_espera.delete()
     await update.message.reply_text(f"🚀 **Cambios aplicados:**\n" + "\n".join(res_final))
@@ -562,41 +585,38 @@ async def cmd_readme(u, c):
         await u.message.reply_text(f"❌ Error: {e}")
 
 async def handle_photo(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    """Recibe imágenes, las limita a tamaño GBA y las sube"""
+    """Recibe imágenes, fuerza 64x64 y paleta reducida"""
     if not MY_CHAT_ID or str(u.effective_chat.id) != MY_CHAT_ID: return
-    
-    if not repo_obj:
-        return await u.message.reply_text("❌ Primero conecta un repo con /conectar")
+    if not repo_obj: return await u.message.reply_text("❌ Sin repo.")
 
     photo = u.message.photo[-1]
     file_id = photo.file_id
-    
     await u.message.reply_chat_action("upload_document")
     
     try:
-        # 1. Descargar
         new_file = await c.bot.get_file(file_id)
         f_bytes = await new_file.download_as_bytearray()
         
-        # --- NUEVA LÓGICA DE LIMITACIÓN ---
+        # --- PROCESAMIENTO GBA ESTRICTO ---
         img = Image.open(io.BytesIO(f_bytes))
         
-        # Si la imagen es más grande que un sprite máximo de GBA (64x64), la bajamos
-        # La GBA no maneja bien objetos más grandes de 64x64 por hardware
+        # 1. Forzar Redimensionado (Max 64x64)
         if img.width > 64 or img.height > 64:
-            img.thumbnail((64, 64), Image.Resampling.LANCZOS)
-            await u.message.reply_text("⚠️ Imagen muy grande. Redimensionando a 64x64 para GBA...")
+            img.thumbnail((64, 64), Image.Resampling.NEAREST) # Nearest mantiene el look pixel art
+            await u.message.reply_text(f"⚠️ Redimensionado a {img.width}x{img.height} para GBA.")
+            
+        # 2. Reducción de Colores (Simular 16 colores)
+        # Esto ayuda a que el sprite se vea "legítimo" de GBA
+        img = img.quantize(colors=16).convert("RGB")
         
-        # Convertir de nuevo a bytes para la función de conversión
+        # Convertir a bytes para la función de C
         img_byte_arr = io.BytesIO()
         img.save(img_byte_arr, format='PNG')
         f_final = img_byte_arr.getvalue()
-        # ----------------------------------
 
         hora = datetime.now().strftime('%M%S')
         nombre_asset = f"sprite_{hora}" 
         
-        # Convertimos la data (ahora garantizada de máximo 64x64)
         c_code, h_code, w, h = convertir_imagen_a_gba(f_final, nombre_asset)
         
         path_c = f"src/{nombre_asset}.c"
@@ -605,17 +625,39 @@ async def handle_photo(u: Update, c: ContextTypes.DEFAULT_TYPE):
         subir_archivo_github(path_c, c_code, f"Art: Nuevo asset {nombre_asset}")
         subir_archivo_github(path_h, h_code, f"Art: Header {nombre_asset}")
         
-        msg = (
-            f"✅ **Arte integrado (Optimizado):**\n"
-            f"📍 `{path_c}`\n"
-            f"📍 `{path_h}`\n\n"
-            f"📐 Tamaño final: {w}x{h}\n"
-            f"💡 **Tip:** He limitado el tamaño a 64x64 para que la GBA pueda cargarlo en la memoria OAM."
-        )
+        msg = f"✅ **Sprite 4bpp (Simulado) Integrado:**\n📍 `{path_c}`\n📐 {w}x{h} px"
         await u.message.reply_text(msg, parse_mode="Markdown")
         
     except Exception as e:
         await u.message.reply_text(f"❌ Error procesando asset: {e}")
+
+async def cmd_debug_video(u, c):
+    """Lia busca errores comunes de pantalla blanca"""
+    if not repo_obj: return await u.message.reply_text("❌ Sin repo.")
+    
+    try:
+        code = repo_obj.get_contents("src/main.c").decoded_content.decode()
+        
+        checklist = []
+        # 1. Chequeo de Registros
+        if "0x04000000" in code and ("0x0003" in code or "3" in code):
+            checklist.append("✅ Modo de video configurado.")
+        else:
+            checklist.append("❌ FALTA CONFIGURAR REG_DISPCNT (Modo 3).")
+            
+        # 2. Chequeo de VRAM
+        if "0x06000000" in code:
+            checklist.append("✅ Puntero a VRAM detectado.")
+        else:
+            checklist.append("❌ NO VEO ESCRITURA EN VRAM (0x06000000).")
+
+        # 3. Respuesta de Lía
+        await u.message.reply_text(
+            "🕵️ **Diagnóstico de Pantalla Blanca:**\n\n" + "\n".join(checklist) + 
+            "\n\n_Si todo sale ✅ y sigue blanca, revisa si el bucle while(1) está vacío._"
+        )
+    except Exception as e:
+        await u.message.reply_text(f"Error leyendo código: {e}")
         
 # --- HELPER: ENVIAR MENSAJE DESDE WEBHOOK (NUEVO) ---
 def notificar_telegram(texto):
@@ -916,6 +958,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
