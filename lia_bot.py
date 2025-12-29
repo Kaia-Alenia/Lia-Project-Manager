@@ -651,18 +651,19 @@ async def cmd_debug_video(u, c):
     if not repo_obj: return await u.message.reply_text("❌ Sin repo.")
     
     try:
+        # Intentamos leer el main.c
         code = repo_obj.get_contents("src/main.c").decoded_content.decode()
         
         checklist = []
-        # 1. Chequeo de Registros
+        # 1. Chequeo de Registros (Mode 3)
         if "0x04000000" in code and ("0x0003" in code or "3" in code):
-            checklist.append("✅ Modo de video configurado.")
+            checklist.append("✅ Modo de video configurado (REG_DISPCNT).")
         else:
             checklist.append("❌ FALTA CONFIGURAR REG_DISPCNT (Modo 3).")
             
         # 2. Chequeo de VRAM
         if "0x06000000" in code:
-            checklist.append("✅ Puntero a VRAM detectado.")
+            checklist.append("✅ Puntero a VRAM (0x06000000) detectado.")
         else:
             checklist.append("❌ NO VEO ESCRITURA EN VRAM (0x06000000).")
 
@@ -672,7 +673,7 @@ async def cmd_debug_video(u, c):
             "\n\n_Si todo sale ✅ y sigue blanca, revisa si el bucle while(1) está vacío._"
         )
     except Exception as e:
-        await u.message.reply_text(f"Error leyendo código: {e}")
+        await u.message.reply_text(f"⚠️ Error leyendo código: {e}")
         
 # --- HELPER: ENVIAR MENSAJE DESDE WEBHOOK (NUEVO) ---
 def notificar_telegram(texto):
@@ -952,6 +953,8 @@ if __name__ == '__main__':
         ("review", cmd_review), # Auditoría de código
         ("gba", cmd_gba),       # Consulta técnica
         ("readme", cmd_readme), # Documentación auto
+        ("readme", cmd_readme), # Documentación auto
+        ("debug", cmd_debug_video), # <--- AGREGA ESTA LÍNEA
     ]
     
     # Registramos los comandos de barra (/)
@@ -973,6 +976,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
