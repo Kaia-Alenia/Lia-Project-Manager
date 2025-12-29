@@ -22,6 +22,7 @@ from supabase import create_client, Client
 from github import Github, Auth 
 from PIL import Image, ImageOps
 import io
+import html  # <--- IMPORTANTE: Necesario para limpiar el código
 # --- LOGS ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -376,11 +377,25 @@ async def cmd_leer(u, c):
     if not c.args: return await u.message.reply_text("Uso: /leer archivo")
     if not repo_obj: return await u.message.reply_text("❌ Sin Repo")
     try:
-        archivo = c.args[0].strip() # Quita espacios extra # Intenta leer explícitamente, incluso si empieza con punto 
+        archivo = c.args[0].strip()
+        # Leemos el contenido
         code = repo_obj.get_contents(archivo).decoded_content.decode()
+        
+        # Guardamos en memoria volátil
         global ultimo_codigo_leido; ultimo_codigo_leido = code
-        await u.message.reply_text(f"📄 **{c.args[0]}**:\n```\n{code[:3000]}\n```", parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"⚠️ {e}")
+        
+        # --- FIX DE SEGURIDAD PARA TELEGRAM ---
+        # 1. Limpiamos caracteres que rompen HTML (<, >, &)
+        codigo_seguro = html.escape(code[:3000])
+        
+        # 2. Usamos etiquetas HTML <pre> para el bloque de código
+        # Esto evita que los asteriscos (*) o guiones bajos (_) rompan el mensaje
+        mensaje = f"📄 <b>{archivo}</b>:\n<pre>{codigo_seguro}</pre>"
+        
+        await u.message.reply_text(mensaje, parse_mode="HTML")
+        
+    except Exception as e: 
+        await u.message.reply_text(f"⚠️ {e}")
 
 async def cmd_run(u, c):
     code = u.message.text.replace("/run", "").strip()
@@ -958,6 +973,7 @@ if __name__ == '__main__':
     
     # Esto mantiene al bot corriendo
     app.run_polling()
+
 
 
 
